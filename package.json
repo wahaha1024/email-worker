@@ -5,7 +5,8 @@
 	"scripts": {
 		"deploy": "wrangler deploy",
 		"dev": "wrangler dev",
-		"start": "wrangler dev"
+		"start": "wrangler dev",
+		"pub": "powershell -ExecutionPolicy Bypass -File deploy.ps1"
 	},
 	"devDependencies": {
 		"wrangler": "^4.61.1"
