@@ -1,0 +1,25 @@
+{
+  "name": "email",
+  "main": "src/index.js",
+  "module": true,
+  "workers_dev": true,
+  "preview_urls": true,
+  "compatibility_date": "2026-01-24",
+  "compatibility_flags": [
+    "global_fetch_strictly_public"
+  ],
+  "routes": [
+    {
+      "pattern": "email.zjyyy.top",
+      "zone_name": "zjyyy.top",
+      "custom_domain": true
+    }
+  ],
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "email_db",
+      "database_id": "a79d1a10-f57c-4db3-a9f6-f2abf5ba84fa"
+    }
+  ]
+}
