@@ -1,0 +1,1 @@
+SELECT * FROM email_logs ORDER BY timestamp DESC LIMIT 10;

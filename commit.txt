@@ -1,9 +1,8 @@
-refactor: fully implement Koobai design system with Lucide icons
+fix: improve database compatibility and logging system
 
-- Add Lucide Icons library support
-- Update bottom nav width to 600px with 20px 30px padding
-- Update nav item font size to 12.8px
-- Change icon font to Lucide SVG icons
-- Add nav-menu wrapper with 32px gap
-- Update responsive styles for mobile
-- Complete Koobai design system documentation
+- Update addLog() to dynamically detect email_logs table structure
+- Update getLogs() to handle various table schemas with field mapping
+- Add forward_history recording for email receive tracking
+- Add error handling for missing tables
+- Maintain backward compatibility with memory logs fallback
+- All 7 database tables now properly utilized

@@ -1,26 +1,116 @@
 // src/index.js - 邮件管理系统 - Koobai 风格
 
+// 内存日志缓冲区（用于快速查看）
 let operationLogs = [];
 const MAX_LOGS = 200;
 
-function addLog(type, action, details = {}) {
+// 添加日志（同时写入数据库）
+async function addLog(env, type, action, details = {}) {
   const log = {
     id: Date.now() + Math.random().toString(36).substr(2, 9),
     timestamp: new Date().toISOString(),
-    type, action, details
+    type,
+    action,
+    details: JSON.stringify(details)
   };
+
+  // 添加到内存缓冲区
   operationLogs.unshift(log);
   if (operationLogs.length > MAX_LOGS) operationLogs = operationLogs.slice(0, MAX_LOGS);
+
+  // 写入数据库（兼容现有表结构）
+  try {
+    if (env.DB) {
+      // 尝试获取 email_logs 表结构
+      const tableInfo = await env.DB.prepare("PRAGMA table_info(email_logs)").all();
+      const columns = tableInfo.results ? tableInfo.results.map(r => r.name) : [];
+
+      if (columns.length > 0) {
+        // 根据实际表结构构建插入语句
+        const insertData = {
+          timestamp: log.timestamp,
+          type: type,
+          action: action,
+          details: log.details
+        };
+
+        // 如果有 created_at 字段
+        if (columns.includes('created_at')) {
+          insertData.created_at = new Date().toISOString();
+        }
+
+        // 构建动态 SQL
+        const fields = Object.keys(insertData).filter(f => columns.includes(f));
+        const placeholders = fields.map(() => '?').join(', ');
+        const values = fields.map(f => insertData[f]);
+
+        if (fields.length > 0) {
+          await env.DB.prepare(`
+            INSERT INTO email_logs (${fields.join(', ')})
+            VALUES (${placeholders})
+          `).bind(...values).run();
+        }
+      }
+    }
+  } catch (e) {
+    // 如果表不存在或写入失败，静默失败（内存日志已记录）
+    console.log('Log table write failed:', e.message);
+  }
+}
+
+// 获取日志（从数据库，兼容现有表结构）
+async function getLogs(env, limit = 50) {
+  try {
+    if (env.DB) {
+      // 尝试获取 email_logs 表结构
+      const tableInfo = await env.DB.prepare("PRAGMA table_info(email_logs)").all();
+      const columns = tableInfo.results ? tableInfo.results.map(r => r.name) : [];
+
+      if (columns.length > 0) {
+        // 确定排序字段
+        const orderBy = columns.includes('timestamp') ? 'timestamp' :
+                       columns.includes('created_at') ? 'created_at' : columns[0];
+
+        // 确定选择字段（映射到统一格式）
+        const selectFields = columns.join(', ');
+
+        const { results } = await env.DB.prepare(`
+          SELECT ${selectFields} FROM email_logs
+          ORDER BY ${orderBy} DESC
+          LIMIT ?
+        `).bind(limit).all();
+
+        // 标准化返回格式
+        return (results || []).map(row => ({
+          id: row.id || Date.now() + Math.random().toString(36).substr(2, 9),
+          timestamp: row.timestamp || row.created_at || new Date().toISOString(),
+          type: row.type || 'info',
+          action: row.action || row.message || JSON.stringify(row),
+          details: row.details || '{}'
+        }));
+      }
+    }
+  } catch (e) {
+    // 如果表不存在，返回内存日志
+    console.log('Using memory logs:', e.message);
+  }
+  return operationLogs.slice(0, limit).map(log => ({
+    id: log.id,
+    timestamp: log.timestamp,
+    type: log.type,
+    action: log.action,
+    details: log.details
+  }));
 }
 
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
-    addLog('request', `${request.method} ${url.pathname}`, { query: url.search });
+    await addLog(env, 'request', `${request.method} ${url.pathname}`, { query: url.search });
     try {
       return await handleRequest(request, env);
     } catch (error) {
-      addLog('error', error.message);
+      await addLog(env, 'error', error.message, { stack: error.stack });
       return new Response(renderErrorPage(error.message), { status: 500 });
     }
   }
@@ -30,6 +120,11 @@ async function handleRequest(request, env) {
   const url = new URL(request.url);
   const path = url.pathname;
 
+  // 邮件接收端点 - Cloudflare Email Routing 转发
+  if (path === '/api/receive' && request.method === 'POST') {
+    return handleReceiveEmail(request, env);
+  }
+  
   if (path === '/' || path.startsWith('/?')) return handleHomePage(request, env);
   if (path.startsWith('/view/')) return handleEmailView(request, path.split('/')[2], env);
   if (path === '/api/emails') return handleApiEmails(request, env);
@@ -38,7 +133,90 @@ async function handleRequest(request, env) {
   if (path === '/rss') return handleRssFeed(request, env);
   if (path === '/logs') return handleLogsPage(request, env);
   if (path === '/api/clear-logs') return handleClearLogs(request, env);
+  if (path === '/api/debug') return handleDebug(request, env);
+  
   return new Response('Not Found', { status: 404 });
+}
+
+// ============ 邮件接收处理 ============
+
+async function handleReceiveEmail(request, env) {
+  try {
+    // Cloudflare Email Routing 发送的邮件数据
+    const formData = await request.formData();
+    
+    const from = formData.get('from') || '';
+    const to = formData.get('to') || '';
+    const subject = formData.get('subject') || '(无主题)';
+    const text = formData.get('text') || '';
+    const html = formData.get('html') || '';
+    const headers = formData.get('headers') || '';
+    
+    // 解析发件人信息
+    const senderMatch = from.match(/(.*)<(.*)>/);
+    const senderName = senderMatch ? senderMatch[1].trim() : '';
+    const senderEmail = senderMatch ? senderMatch[2].trim() : from;
+    
+    // 生成 message_id
+    const messageId = headers.match(/Message-ID:\s*<([^>]+)>/)?.[1] ||
+                     `msg_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+
+    // 记录到 forward_history（如果表存在）
+    try {
+      await env.DB.prepare(`
+        INSERT INTO forward_history (message_id, sender, recipient, subject, timestamp, status, raw_size)
+        VALUES (?, ?, ?, ?, datetime('now'), 'received', ?)
+      `).bind(messageId, senderEmail, to, subject, JSON.stringify(formData).length).run();
+    } catch (e) {
+      // forward_history 表可能不存在，忽略错误
+    }
+
+    await addLog(env, 'receive', `收到邮件: ${subject}`, { from: senderEmail, to });
+    
+    // 检查是否已存在（去重）
+    try {
+      const existing = await env.DB.prepare('SELECT id FROM emails WHERE message_id = ?').bind(messageId).first();
+      if (existing) {
+        await addLog(env, 'receive', `重复邮件忽略: ${subject}`, { messageId });
+        return new Response(JSON.stringify({ success: true, duplicate: true }), { 
+          headers: { 'Content-Type': 'application/json' } 
+        });
+      }
+    } catch (e) {
+      // 继续处理
+    }
+    
+    // 保存到数据库
+    const result = await env.DB.prepare(`
+      INSERT INTO emails (
+        message_id, subject, sender, sender_name, 
+        content_text, content_html, 
+        date_sent, date_received, 
+        is_read, is_deleted, priority,
+        created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'), 0, 0, 'normal', datetime('now'), datetime('now'))
+    `).bind(messageId, subject, senderEmail, senderName, text, html).run();
+    
+    await addLog(env, 'receive', `邮件已保存: ${subject}`, { 
+      id: result.meta?.last_row_id,
+      from: senderEmail 
+    });
+    
+    return new Response(JSON.stringify({ 
+      success: true, 
+      id: result.meta?.last_row_id,
+      subject 
+    }), { 
+      headers: { 'Content-Type': 'application/json' } 
+    });
+    
+  } catch (error) {
+    await addLog(env, 'error', `邮件接收失败: ${error.message}`);
+    return new Response(JSON.stringify({ success: false, error: error.message }), { 
+      status: 500,
+      headers: { 'Content-Type': 'application/json' } 
+    });
+  }
 }
 
 async function handleHomePage(request, env) {
@@ -55,14 +233,16 @@ async function handleEmailView(request, emailId, env) {
   const email = await env.DB.prepare('SELECT * FROM emails WHERE id = ? AND is_deleted = 0').bind(emailId).first();
   if (!email) return new Response(renderKoobaiPage({ page: 'view', content: '<div class="empty">邮件不存在</div>' }), { status: 404 });
   await env.DB.prepare('UPDATE emails SET is_read = 1 WHERE id = ?').bind(emailId).run();
+  await addLog(env, 'read', `查看邮件: ${email.subject}`, { id: emailId });
   const html = renderKoobaiPage({ page: 'view', emailId, content: renderEmailDetail(email) });
   return new Response(html, { headers: { 'Content-Type': 'text/html; charset=utf-8' } });
 }
 
 async function handleLogsPage(request, env) {
+  const logs = await getLogs(env, 50);
   const html = renderKoobaiPage({
     page: 'logs',
-    content: renderLogsContent(operationLogs.slice(0, 50))
+    content: renderLogsContent(logs)
   });
   return new Response(html, { headers: { 'Content-Type': 'text/html; charset=utf-8' } });
 }
@@ -731,6 +911,7 @@ function renderLogsContent(logs) {
             <span class="log-type log-type-${log.type}">${log.type}</span>
           </div>
           <div>${escapeHtml(log.action)}</div>
+          ${log.details ? `<div style="margin-top:4px;font-size:12px;color:var(--text-muted)">${escapeHtml(typeof log.details === 'string' ? log.details : JSON.stringify(log.details))}</div>` : ''}
         </div>
       `).join('') : `
         <div class="empty">
@@ -824,6 +1005,7 @@ async function handleDeleteEmail(request, env) {
       if (ids.length) {
         const placeholders = ids.map(() => '?').join(',');
         await env.DB.prepare(`UPDATE emails SET is_deleted = 1 WHERE id IN (${placeholders})`).bind(...ids).run();
+        await addLog(env, 'delete', `删除邮件`, { ids });
       }
     }
     return new Response(JSON.stringify({ success: true }), { headers: { 'Content-Type': 'application/json' } });
@@ -856,9 +1038,35 @@ ${items}
 
 async function handleClearLogs(request, env) {
   operationLogs = [];
+  try {
+    await env.DB.prepare('DELETE FROM email_logs').run();
+  } catch (e) {
+    // 表可能不存在
+  }
   return new Response(JSON.stringify({ success: true }), { headers: { 'Content-Type': 'application/json' } });
 }
 
 async function handleDebug(request, env) {
-  return new Response(JSON.stringify({ success: true }), { headers: { 'Content-Type': 'application/json' } });
+  let tables = [];
+  try {
+    const { results } = await env.DB.prepare("SELECT name FROM sqlite_master WHERE type='table'").all();
+    tables = results ? results.map(r => r.name) : [];
+  } catch (e) {
+    tables = ['error: ' + e.message];
+  }
+  
+  let emailCount = 0;
+  try {
+    const { results } = await env.DB.prepare('SELECT COUNT(*) as count FROM emails').all();
+    emailCount = results ? results[0].count : 0;
+  } catch (e) {
+    emailCount = -1;
+  }
+  
+  return new Response(JSON.stringify({ 
+    success: true, 
+    tables,
+    emailCount,
+    logsInMemory: operationLogs.length
+  }), { headers: { 'Content-Type': 'application/json' } });
 }
