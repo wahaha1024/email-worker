@@ -98,114 +98,126 @@ function renderKoobaiPage({ page, emailId, content }) {
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <title>MailBox</title>
 <style>
-/* ========== Koobai 极简风格 ========== */
+/* ========== Koobai 设计规范 ========== */
 :root {
   --bg: #f2f0eb;
-  --bg-card: #ffffff;
-  --text: #1a1a1a;
+  --bg-card: #fffdfe;
+  --text: #222222;
   --text-secondary: #666666;
   --text-muted: #999999;
-  --border: #e5e5e5;
-  --accent: #1a1a1a;
+  --border: rgba(0,0,0,0.08);
+  --accent: #994d61;
   --hover-bg: rgba(0,0,0,0.06);
   --active-bg: rgba(0,0,0,0.1);
+  --nav-bg: rgba(242, 240, 235, 0.5);
   --radius: 16px;
   --radius-sm: 12px;
-  --font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  --font: JetBrainsMono, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Ubuntu, "Helvetica Neue", Helvetica, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
 }
 
-* { margin: 0; padding: 0; box-sizing: border-box; }
+* { margin: 0; padding: 0; box-sizing: border-box; -webkit-font-smoothing: antialiased; }
 
 body {
   font-family: var(--font);
   background: var(--bg);
   color: var(--text);
-  font-size: 15px;
-  line-height: 1.5;
+  font-size: 16px;
+  line-height: 1.6;
   padding-bottom: 120px;
 }
 
 /* 主内容区 - 无顶栏 */
 .main {
-  max-width: 720px;
+  max-width: 800px;
   margin: 0 auto;
-  padding: 16px;
+  padding: 24px;
 }
 
-/* 页面标题 */
+/* 页面标题 - Koobai 风格 */
 .page-title {
-  font-size: 32px;
+  font-size: 28px;
   font-weight: 600;
   margin-bottom: 8px;
-  letter-spacing: -0.5px;
+  letter-spacing: -0.3px;
+  color: var(--text);
 }
 
 .page-subtitle {
   color: var(--text-muted);
   font-size: 14px;
-  margin-bottom: 24px;
+  margin-bottom: 32px;
+  font-weight: 400;
 }
 
-/* 搜索框 */
+/* 搜索框 - Koobai 风格 */
 .search-box {
   position: relative;
-  margin-bottom: 20px;
+  margin-bottom: 24px;
 }
 
 .search-input {
   width: 100%;
-  padding: 12px 16px 12px 44px;
+  padding: 14px 16px 14px 48px;
   border: none;
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius);
   font-size: 15px;
   background: var(--bg-card);
   box-shadow: 0 1px 3px rgba(0,0,0,0.04);
+  transition: all 0.2s ease;
+  font-family: var(--font);
 }
 
 .search-input:focus {
   outline: none;
-  box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+  box-shadow: 0 4px 12px rgba(0,0,0,0.08);
+}
+
+.search-input::placeholder {
+  color: var(--text-muted);
 }
 
 .search-icon {
   position: absolute;
-  left: 16px;
+  left: 18px;
   top: 50%;
   transform: translateY(-50%);
   color: var(--text-muted);
+  font-size: 18px;
 }
 
-/* 邮件列表 - 无已读/未读标记 */
+/* 邮件列表 - Koobai 极简风格 */
 .email-list {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 12px;
 }
 
 .email-item {
   background: var(--bg-card);
-  padding: 16px;
-  border-radius: var(--radius-sm);
+  padding: 20px;
+  border-radius: var(--radius);
   display: flex;
   align-items: flex-start;
-  gap: 12px;
+  gap: 16px;
   cursor: pointer;
-  transition: all 0.2s;
+  transition: all 0.2s ease;
   box-shadow: 0 1px 3px rgba(0,0,0,0.04);
 }
 
 .email-item:hover {
-  transform: translateY(-1px);
-  box-shadow: 0 4px 12px rgba(0,0,0,0.08);
+  transform: translateY(-2px);
+  box-shadow: 0 8px 24px rgba(0,0,0,0.08);
 }
 
 .email-checkbox {
-  width: 18px;
-  height: 18px;
+  width: 20px;
+  height: 20px;
   margin-top: 2px;
   accent-color: var(--accent);
   opacity: 0;
   transition: opacity 0.2s;
+  cursor: pointer;
+  flex-shrink: 0;
 }
 
 .select-mode .email-checkbox {
@@ -220,24 +232,28 @@ body {
 .email-sender {
   font-weight: 500;
   font-size: 15px;
-  margin-bottom: 4px;
+  margin-bottom: 6px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  color: var(--text);
 }
 
 .email-subject {
-  color: var(--text-secondary);
-  font-size: 14px;
+  color: var(--text);
+  font-size: 17.6px;
+  font-weight: 500;
+  line-height: 29.92px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  margin-bottom: 4px;
+  margin-bottom: 6px;
 }
 
 .email-preview {
-  color: var(--text-muted);
-  font-size: 13px;
+  color: var(--text-secondary);
+  font-size: 14px;
+  line-height: 1.5;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -247,76 +263,95 @@ body {
   font-size: 13px;
   color: var(--text-muted);
   white-space: nowrap;
+  flex-shrink: 0;
+  margin-top: 4px;
 }
 
-/* 空状态 */
+/* 空状态 - Koobai 风格 */
 .empty {
   text-align: center;
-  padding: 80px 20px;
+  padding: 100px 20px;
   color: var(--text-muted);
 }
 
 .empty-icon {
-  font-size: 48px;
-  margin-bottom: 16px;
-  opacity: 0.5;
+  font-size: 56px;
+  margin-bottom: 20px;
+  opacity: 0.4;
 }
 
-/* 邮件详情 */
+.empty-text {
+  font-size: 15px;
+  color: var(--text-secondary);
+}
+
+/* 邮件详情 - Koobai 风格 */
 .email-detail {
   background: var(--bg-card);
-  border-radius: var(--radius-sm);
-  padding: 20px;
+  border-radius: var(--radius);
+  padding: 32px;
   box-shadow: 0 1px 3px rgba(0,0,0,0.04);
 }
 
 .email-detail-header {
-  margin-bottom: 20px;
-  padding-bottom: 16px;
+  margin-bottom: 28px;
+  padding-bottom: 24px;
   border-bottom: 1px solid var(--border);
 }
 
 .email-detail-subject {
-  font-size: 20px;
+  font-size: 24px;
   font-weight: 600;
   line-height: 1.4;
-  margin-bottom: 12px;
+  margin-bottom: 16px;
+  color: var(--text);
+  letter-spacing: -0.2px;
 }
 
 .email-detail-meta {
   display: flex;
   flex-wrap: wrap;
   gap: 12px;
-  font-size: 13px;
+  font-size: 14px;
   color: var(--text-secondary);
+}
+
+.email-detail-meta span {
+  display: flex;
+  align-items: center;
 }
 
 .email-detail-body {
   line-height: 1.8;
   color: var(--text);
+  font-size: 16px;
 }
 
 .email-detail-body img {
   max-width: 100%;
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
+  margin: 16px 0;
+}
+
+.email-detail-body p {
+  margin-bottom: 16px;
 }
 
 /* ========== Koobai 风格底部导航栏 ========== */
 .bottom-nav {
   position: fixed;
-  bottom: 16px;
+  bottom: 30px;
   left: 50%;
   transform: translateX(-50%);
-  background: rgba(255, 255, 255, 0.92);
-  backdrop-filter: blur(20px) saturate(180%);
-  -webkit-backdrop-filter: blur(20px) saturate(180%);
-  border-radius: 24px;
-  padding: 8px;
+  background: rgba(242, 240, 235, 0.5);
+  backdrop-filter: blur(20px) saturate(1.8);
+  -webkit-backdrop-filter: blur(20px) saturate(1.8);
+  border-radius: 50px;
+  padding: 12px 20px;
   display: flex;
   align-items: center;
   gap: 4px;
-  box-shadow: 0 4px 24px rgba(0,0,0,0.08), 0 1px 3px rgba(0,0,0,0.04);
-  border: 1px solid rgba(0,0,0,0.04);
+  box-shadow: rgba(0, 0, 0, 0.1) 0px 0px 1px 0px, rgba(0, 0, 0, 0.12) 0px 10px 30px 0px;
   z-index: 1000;
 }
 
@@ -332,8 +367,8 @@ body {
   flex-direction: column;
   align-items: center;
   gap: 4px;
-  padding: 10px 18px;
-  border-radius: 16px;
+  padding: 10px 20px;
+  border-radius: 40px;
   font-size: 12px;
   color: var(--text-secondary);
   background: transparent;
@@ -341,7 +376,7 @@ body {
   cursor: pointer;
   transition: all 0.2s;
   text-decoration: none;
-  min-width: 56px;
+  min-width: 60px;
 }
 
 .nav-btn:hover {
@@ -368,63 +403,100 @@ body {
   justify-content: center;
 }
 
-/* 日志页面 */
+/* 日志页面 - Koobai 风格 */
 .logs-list {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 12px;
 }
 
 .log-item {
   background: var(--bg-card);
-  padding: 14px 16px;
-  border-radius: var(--radius-sm);
-  font-size: 13px;
+  padding: 16px 20px;
+  border-radius: var(--radius);
+  font-size: 14px;
   box-shadow: 0 1px 3px rgba(0,0,0,0.04);
+  transition: all 0.2s ease;
+}
+
+.log-item:hover {
+  box-shadow: 0 4px 12px rgba(0,0,0,0.08);
 }
 
 .log-header {
   display: flex;
-  gap: 10px;
-  margin-bottom: 6px;
+  gap: 12px;
+  margin-bottom: 8px;
   align-items: center;
 }
 
 .log-time {
   color: var(--text-muted);
-  font-family: monospace;
+  font-family: JetBrainsMono, monospace;
   font-size: 12px;
+  letter-spacing: 0.5px;
 }
 
 .log-type {
-  padding: 2px 8px;
-  border-radius: 4px;
+  padding: 3px 10px;
+  border-radius: 6px;
   font-size: 11px;
   font-weight: 500;
   text-transform: uppercase;
+  letter-spacing: 0.5px;
 }
 
-.log-type-receive { background: #dbeafe; color: #1e40af; }
-.log-type-read { background: #f3e8ff; color: #7c3aed; }
-.log-type-delete { background: #fee2e2; color: #991b1b; }
-.log-type-error { background: #fecaca; color: #7f1d1d; }
+.log-type-receive { background: rgba(219, 234, 254, 0.6); color: #1e40af; }
+.log-type-read { background: rgba(243, 232, 255, 0.6); color: #7c3aed; }
+.log-type-delete { background: rgba(254, 226, 226, 0.6); color: #991b1b; }
+.log-type-error { background: rgba(254, 202, 202, 0.6); color: #7f1d1d; }
 .log-type-request { background: var(--border); color: var(--text-secondary); }
 
-/* 响应式 */
+/* 响应式 - Koobai 风格 */
+@media (max-width: 768px) {
+  .main { padding: 20px; }
+  .email-detail { padding: 24px; }
+}
+
 @media (max-width: 480px) {
-  .main { padding: 12px; }
-  .page-title { font-size: 28px; }
-  .bottom-nav {
-    bottom: 12px;
-    padding: 6px;
-    border-radius: 20px;
+  .main { padding: 16px; }
+  .page-title { font-size: 24px; }
+  .page-subtitle { margin-bottom: 24px; }
+  
+  .email-item {
+    padding: 16px;
+    gap: 12px;
   }
+  
+  .email-subject {
+    font-size: 16px;
+    line-height: 1.5;
+  }
+  
+  .bottom-nav {
+    bottom: 16px;
+    padding: 10px 16px;
+    border-radius: 40px;
+  }
+  
   .nav-btn {
     padding: 8px 14px;
-    min-width: 48px;
+    min-width: 50px;
     font-size: 11px;
   }
-  .nav-btn .icon { font-size: 18px; height: 20px; }
+  
+  .nav-btn .icon { 
+    font-size: 18px; 
+    height: 20px; 
+  }
+  
+  .email-detail {
+    padding: 20px;
+  }
+  
+  .email-detail-subject {
+    font-size: 20px;
+  }
 }
 </style>
 </head>
@@ -584,7 +656,7 @@ function renderEmailList(emails) {
     ` : `
       <div class="empty">
         <div class="empty-icon">📭</div>
-        <div>没有邮件</div>
+        <div class="empty-text">没有邮件</div>
       </div>
     `}
   `;
@@ -629,7 +701,7 @@ function renderLogsContent(logs) {
       `).join('') : `
         <div class="empty">
           <div class="empty-icon">◈</div>
-          <div>暂无日志</div>
+          <div class="empty-text">暂无日志</div>
         </div>
       `}
     </div>

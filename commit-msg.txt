@@ -1,0 +1,8 @@
+refactor: optimize UI following Koobai design system
+
+- Update color system: bg #f2f0eb, card #fffdfe, text #222222
+- Update font stack: add JetBrainsMono
+- Optimize email list: larger spacing, softer shadows
+- Update card border-radius and hover effects
+- Add responsive breakpoints
+- Unify empty state and logs page styles

@@ -1,0 +1,69 @@
+---
+description: 
+alwaysApply: true
+enabled: true
+updatedAt: 2026-02-03T02:10:22.635Z
+provider: 
+---
+
+# Koobai Design System Rule
+
+当用户要求参考 koobai.com 或类似极简风格设计时，遵循以下规范：
+
+## 色彩规范
+- 页面背景: `#f2f0eb` (米白色)
+- 卡片背景: `#fffdfe` (近白色)
+- 主文字: `#222222` (深灰黑)
+- 次要文字: `#666666`
+- 弱化文字: `#999999`
+- 强调色: `#994d61` (玫红)
+- 选中背景: `rgba(0,0,0,0.1)`
+- 悬停背景: `rgba(0,0,0,0.06)`
+
+## 字体规范
+- 字体栈: `JetBrainsMono, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif`
+- 页面标题: 28-32px, weight 600
+- 卡片标题: 17.6px, weight 500, line-height 29.92px
+- 正文: 16px, weight 400
+- 小字/标签: 12-14px
+
+## 底部导航栏规范
+```css
+position: fixed;
+bottom: 30px;
+left: 50%;
+transform: translateX(-50%);
+background: rgba(242, 240, 235, 0.5);
+backdrop-filter: blur(20px) saturate(1.8);
+border-radius: 50px;
+padding: 12px 20px;
+box-shadow: rgba(0, 0, 0, 0.1) 0px 0px 1px, rgba(0, 0, 0, 0.12) 0px 10px 30px;
+```
+
+## 圆角规范
+- 导航栏: 50px (胶囊形)
+- 卡片: 16px
+- 按钮选中: 40px
+
+## 间距规范
+- 页面内边距: 24px (桌面), 16px (移动)
+- 卡片间距: 12-16px
+- 卡片内边距: 16-20px
+
+## 阴影规范
+- 卡片默认: `0 1px 3px rgba(0,0,0,0.04)`
+- 卡片悬停: `0 4px 12px rgba(0,0,0,0.08)`
+- 导航栏: `rgba(0,0,0,0.1) 0px 0px 1px, rgba(0,0,0,0.12) 0px 10px 30px`
+
+## 交互规范
+- 过渡时间: 200ms
+- 缓动函数: ease
+- 悬停: 背景变为 rgba(0,0,0,0.06)
+- 选中: 背景变为 rgba(0,0,0,0.1), 文字加深
+
+## 布局原则
+1. 无顶部导航栏，内容从页面顶部开始
+2. 底部固定悬浮导航栏
+3. 大量使用留白
+4. 卡片式内容展示
+5. 清晰的信息层级
