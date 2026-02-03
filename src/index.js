@@ -74,21 +74,21 @@ function renderKoobaiPage({ page, emailId, content }) {
   const isLogs = page === 'logs';
   const isView = page === 'view';
 
-  // 底部导航按钮 - Koobai 风格
+  // 底部导航按钮 - Koobai 风格，使用 Lucide 图标
   const navButtons = [
-    { id: 'inbox', icon: '✉', label: '收件箱', href: '/', active: isInbox },
-    { id: 'logs', icon: '◈', label: '日志', href: '/logs', active: isLogs },
-    { id: 'rss', icon: '◎', label: '订阅', href: '/rss', active: false },
+    { id: 'inbox', icon: 'mail', label: '收件箱', href: '/', active: isInbox },
+    { id: 'logs', icon: 'activity', label: '日志', href: '/logs', active: isLogs },
+    { id: 'rss', icon: 'rss', label: '订阅', href: '/rss', active: false },
   ];
 
   // 功能按钮
   const actionButtons = isInbox ? [
-    { id: 'select', icon: '☐', label: '选择', onclick: 'toggleSelect()' },
-    { id: 'read', icon: '✓', label: '已读', onclick: 'markRead()', disabled: true },
-    { id: 'delete', icon: '⌫', label: '删除', onclick: 'doDelete()', disabled: true },
+    { id: 'select', icon: 'square', label: '选择', onclick: 'toggleSelect()' },
+    { id: 'read', icon: 'check', label: '已读', onclick: 'markRead()', disabled: true },
+    { id: 'delete', icon: 'trash-2', label: '删除', onclick: 'doDelete()', disabled: true },
   ] : isView ? [
-    { id: 'back', icon: '←', label: '返回', onclick: 'history.back()' },
-    { id: 'delete', icon: '⌫', label: '删除', onclick: `deleteEmail(${emailId})` },
+    { id: 'back', icon: 'arrow-left', label: '返回', onclick: 'history.back()' },
+    { id: 'delete', icon: 'trash-2', label: '删除', onclick: `deleteEmail(${emailId})` },
   ] : [];
 
   return `<!DOCTYPE html>
@@ -97,6 +97,7 @@ function renderKoobaiPage({ page, emailId, content }) {
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <title>MailBox</title>
+<script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
 <style>
 /* ========== Koobai 设计规范 ========== */
 :root {
@@ -343,50 +344,53 @@ body {
   bottom: 30px;
   left: 50%;
   transform: translateX(-50%);
+  width: 600px;
+  max-width: 90vw;
   background: rgba(242, 240, 235, 0.5);
   backdrop-filter: blur(20px) saturate(1.8);
   -webkit-backdrop-filter: blur(20px) saturate(1.8);
   border-radius: 50px;
-  padding: 12px 20px;
+  padding: 20px 30px;
   display: flex;
   align-items: center;
+  justify-content: center;
   gap: 4px;
   box-shadow: rgba(0, 0, 0, 0.1) 0px 0px 1px 0px, rgba(0, 0, 0, 0.12) 0px 10px 30px 0px;
   z-index: 1000;
 }
 
+.nav-menu {
+  display: flex;
+  align-items: center;
+  gap: 32px;
+}
+
 .nav-divider {
   width: 1px;
-  height: 24px;
-  background: var(--border);
-  margin: 0 4px;
+  height: 20px;
+  background: rgba(0, 0, 0, 0.1);
 }
 
 .nav-btn {
   display: flex;
-  flex-direction: column;
   align-items: center;
-  gap: 4px;
-  padding: 10px 20px;
-  border-radius: 40px;
-  font-size: 12px;
-  color: var(--text-secondary);
+  gap: 6px;
+  padding: 0;
+  font-size: 12.8px;
+  color: #444444;
   background: transparent;
   border: none;
   cursor: pointer;
-  transition: all 0.2s;
+  transition: all 0.2s ease;
   text-decoration: none;
-  min-width: 60px;
 }
 
 .nav-btn:hover {
-  background: var(--hover-bg);
-  color: var(--text);
+  color: #994d61;
 }
 
 .nav-btn.active {
-  background: var(--active-bg);
-  color: var(--text);
+  color: #994d61;
 }
 
 .nav-btn:disabled {
@@ -395,12 +399,19 @@ body {
 }
 
 .nav-btn .icon {
-  font-size: 20px;
-  line-height: 1;
-  height: 22px;
+  width: 20px;
+  height: 20px;
   display: flex;
   align-items: center;
   justify-content: center;
+}
+
+.nav-btn .icon svg {
+  width: 20px;
+  height: 20px;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 /* 日志页面 - Koobai 风格 */
@@ -456,9 +467,19 @@ body {
 @media (max-width: 768px) {
   .main { padding: 20px; }
   .email-detail { padding: 24px; }
+  
+  .bottom-nav {
+    width: auto;
+    min-width: 500px;
+    padding: 16px 24px;
+  }
+  
+  .nav-menu {
+    gap: 24px;
+  }
 }
 
-@media (max-width: 480px) {
+@media (max-width: 600px) {
   .main { padding: 16px; }
   .page-title { font-size: 24px; }
   .page-subtitle { margin-bottom: 24px; }
@@ -475,19 +496,18 @@ body {
   
   .bottom-nav {
     bottom: 16px;
-    padding: 10px 16px;
+    width: calc(100% - 32px);
+    max-width: none;
+    padding: 14px 20px;
     border-radius: 40px;
   }
   
-  .nav-btn {
-    padding: 8px 14px;
-    min-width: 50px;
-    font-size: 11px;
+  .nav-menu {
+    gap: 16px;
   }
   
-  .nav-btn .icon { 
-    font-size: 18px; 
-    height: 20px; 
+  .nav-btn {
+    font-size: 12px;
   }
   
   .email-detail {
@@ -508,24 +528,33 @@ body {
 
 <!-- Koobai 风格底部导航 -->
 <div class="bottom-nav">
-  ${navButtons.map(btn => `
-    <a href="${btn.href}" ${btn.id === 'rss' ? 'target="_blank"' : ''}
-       class="nav-btn ${btn.active ? 'active' : ''}">
-      <span class="icon">${btn.icon}</span>
-      <span>${btn.label}</span>
-    </a>
-  `).join('')}
+  <div class="nav-menu">
+    ${navButtons.map(btn => `
+      <a href="${btn.href}" ${btn.id === 'rss' ? 'target="_blank"' : ''}
+         class="nav-btn ${btn.active ? 'active' : ''}">
+        <span class="icon" data-lucide="${btn.icon}"></span>
+        <span>${btn.label}</span>
+      </a>
+    `).join('')}
 
-  ${actionButtons.length > 0 ? '<div class="nav-divider"></div>' : ''}
+    ${actionButtons.length > 0 ? '<div class="nav-divider"></div>' : ''}
 
-  ${actionButtons.map(btn => `
-    <button class="nav-btn" id="${btn.id}Btn" onclick="${btn.onclick}"
-            ${btn.disabled ? 'disabled' : ''}>
-      <span class="icon">${btn.icon}</span>
-      <span>${btn.label}</span>
-    </button>
-  `).join('')}
+    ${actionButtons.map(btn => `
+      <button class="nav-btn" id="${btn.id}Btn" onclick="${btn.onclick}"
+              ${btn.disabled ? 'disabled' : ''}>
+        <span class="icon" data-lucide="${btn.icon}"></span>
+        <span>${btn.label}</span>
+      </button>
+    `).join('')}
+  </div>
 </div>
+
+<script>
+  // 初始化 Lucide 图标
+  if (typeof lucide !== 'undefined') {
+    lucide.createIcons();
+  }
+</script>
 
 <script>
   let selectMode = false;
@@ -535,18 +564,23 @@ body {
     selectMode = !selectMode;
     const list = document.querySelector('.email-list');
     const btn = document.getElementById('selectBtn');
+    const icon = btn.querySelector('[data-lucide]');
 
     if (selectMode) {
       list.classList.add('select-mode');
       btn.classList.add('active');
-      btn.querySelector('.icon').textContent = '☑';
+      if (icon) icon.setAttribute('data-lucide', 'check-square');
     } else {
       list.classList.remove('select-mode');
       btn.classList.remove('active');
-      btn.querySelector('.icon').textContent = '☐';
+      if (icon) icon.setAttribute('data-lucide', 'square');
       document.querySelectorAll('.email-checkbox').forEach(cb => cb.checked = false);
       selectedIds.clear();
       updateButtons();
+    }
+    // 重新初始化图标
+    if (typeof lucide !== 'undefined') {
+      lucide.createIcons();
     }
   }
 

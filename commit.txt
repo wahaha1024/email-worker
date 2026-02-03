@@ -1,0 +1,9 @@
+refactor: fully implement Koobai design system with Lucide icons
+
+- Add Lucide Icons library support
+- Update bottom nav width to 600px with 20px 30px padding
+- Update nav item font size to 12.8px
+- Change icon font to Lucide SVG icons
+- Add nav-menu wrapper with 32px gap
+- Update responsive styles for mobile
+- Complete Koobai design system documentation
