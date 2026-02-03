@@ -1,0 +1,1 @@
+refactor: koobai style UI - remove top nav and simplify design

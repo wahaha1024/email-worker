@@ -9,6 +9,7 @@
 		"pub": "powershell -ExecutionPolicy Bypass -File deploy.ps1"
 	},
 	"devDependencies": {
+		"puppeteer": "^24.36.1",
 		"wrangler": "^4.61.1"
 	}
 }
