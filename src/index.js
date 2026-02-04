@@ -574,7 +574,13 @@ function renderKoobaiPage({ page, emailId, content }) {
     { id: 'rss', icon: 'rss', label: '订阅', href: '/rss', active: false },
   ];
 
+  // 动态获取当前筛选状态
+  const currentCategory = isInbox ? (new URLSearchParams(window?.location?.search)).get('category') || '' : '';
+  const currentIsRead = isInbox ? (new URLSearchParams(window?.location?.search)).get('is_read') : null;
+
   const actionButtons = isInbox ? [
+    { id: 'filter', icon: 'filter', label: '筛选', onclick: 'toggleFilterMenu()' },
+    { id: 'search', icon: 'search', label: '搜索', onclick: 'toggleSearchBox()' },
     { id: 'select', icon: 'square', label: '选择', onclick: 'toggleSelect()' },
     { id: 'read', icon: 'check', label: '已读', onclick: 'markRead()', disabled: true },
     { id: 'delete', icon: 'trash-2', label: '删除', onclick: 'doDelete()', disabled: true },
@@ -1003,6 +1009,77 @@ body {
   let selectMode = false;
   let selectedIds = new Set();
   let currentForwardId = null;
+  let filterMenuOpen = false;
+  let searchBoxOpen = false;
+
+  // 切换筛选菜单
+  function toggleFilterMenu() {
+    filterMenuOpen = !filterMenuOpen;
+    const menu = document.getElementById('filterMenu');
+    const btn = document.getElementById('filterBtn');
+
+    if (menu) {
+      menu.style.display = filterMenuOpen ? 'block' : 'none';
+    }
+    if (btn) {
+      if (filterMenuOpen) btn.classList.add('active');
+      else btn.classList.remove('active');
+    }
+
+    // 关闭搜索框
+    if (filterMenuOpen && searchBoxOpen) {
+      toggleSearchBox();
+    }
+  }
+
+  // 切换搜索框
+  function toggleSearchBox() {
+    searchBoxOpen = !searchBoxOpen;
+    const box = document.getElementById('searchBox');
+    const btn = document.getElementById('searchBtn');
+    const input = document.getElementById('searchInput');
+
+    if (box) {
+      box.style.display = searchBoxOpen ? 'block' : 'none';
+    }
+    if (btn) {
+      if (searchBoxOpen) btn.classList.add('active');
+      else btn.classList.remove('active');
+    }
+
+    // 聚焦输入框
+    if (searchBoxOpen && input) {
+      setTimeout(() => input.focus(), 100);
+    }
+
+    // 关闭筛选菜单
+    if (searchBoxOpen && filterMenuOpen) {
+      toggleFilterMenu();
+    }
+  }
+
+  // 执行搜索
+  function doSearch() {
+    const input = document.getElementById('searchInput');
+    const query = input ? input.value.trim() : '';
+    if (query) {
+      window.location.href = '/?search=' + encodeURIComponent(query);
+    } else {
+      window.location.href = '/';
+    }
+  }
+
+  // 回车搜索
+  document.addEventListener('DOMContentLoaded', function() {
+    const searchInput = document.getElementById('searchInput');
+    if (searchInput) {
+      searchInput.addEventListener('keypress', function(e) {
+        if (e.key === 'Enter') {
+          doSearch();
+        }
+      });
+    }
+  });
 
   function toggleSelect() {
     selectMode = !selectMode;
@@ -1126,19 +1203,19 @@ body {
 
 function renderEmailList(emails, filters = {}) {
   const { category, isRead, search, tags = [] } = filters;
-  
+
   const items = emails.map(email => {
     const preview = (email.content_text || '').substring(0, 60).replace(/\s+/g, ' ');
     const isUnread = !email.is_read;
     let tagHtml = '';
-    
+
     try {
       const emailTags = JSON.parse(email.tags || '[]');
       if (emailTags.length > 0) {
         tagHtml = `<span class="email-tag">${emailTags[0]}</span>`;
       }
     } catch (e) {}
-    
+
     return `
       <div class="email-item ${isUnread ? 'unread' : ''}" data-id="${email.id}">
         <input type="checkbox" class="email-checkbox" value="${email.id}" onclick="event.stopPropagation(); updateSelection();">
@@ -1155,46 +1232,152 @@ function renderEmailList(emails, filters = {}) {
     `;
   }).join('');
 
-  // 生成分类筛选按钮
+  // 筛选菜单（默认隐藏，点击筛选按钮显示）
   const categories = [
-    { id: '', label: '全部' },
-    { id: 'inbox', label: '收件箱' },
-    { id: 'important', label: '重要' },
-    { id: 'unread', label: '未读' },
+    { id: '', label: '全部', icon: 'inbox' },
+    { id: 'inbox', label: '收件箱', icon: 'mail' },
+    { id: 'important', label: '重要', icon: 'star' },
+    { id: 'unread', label: '未读', icon: 'circle' },
   ];
-  
-  const filterHtml = `
-    <div class="filter-bar">
-      ${categories.map(cat => `
-        <a href="/?${cat.id ? (cat.id === 'unread' ? 'is_read=0' : `category=${cat.id}`) : ''}" 
-           class="filter-btn ${(category === cat.id || (cat.id === 'unread' && isRead === '0')) ? 'active' : ''}">
-          ${cat.label}
-        </a>
-      `).join('')}
+
+  const filterMenuHtml = `
+    <div id="filterMenu" class="filter-menu" style="display: none;">
+      <div class="filter-menu-content">
+        ${categories.map(cat => `
+          <a href="/?${cat.id ? (cat.id === 'unread' ? 'is_read=0' : `category=${cat.id}`) : ''}"
+             class="filter-menu-item ${(category === cat.id || (cat.id === 'unread' && isRead === '0')) ? 'active' : ''}">
+            <span data-lucide="${cat.icon}" class="filter-menu-icon"></span>
+            <span>${cat.label}</span>
+          </a>
+        `).join('')}
+      </div>
+    </div>
+  `;
+
+  // 搜索框（默认隐藏，点击搜索按钮显示）
+  const searchBoxHtml = `
+    <div id="searchBox" class="search-box-popup" style="display: none;">
+      <div class="search-box-content">
+        <span data-lucide="search" class="search-box-icon"></span>
+        <input type="text" id="searchInput" class="search-box-input" placeholder="搜索邮件..." value="${escapeHtml(search || '')}">
+        <button onclick="doSearch()" class="search-box-btn">搜索</button>
+        <button onclick="toggleSearchBox()" class="search-box-btn secondary">取消</button>
+      </div>
     </div>
   `;
 
   return `
-    <h1 class="page-title">收件箱</h1>
-    <p class="page-subtitle">${emails.length} 封邮件</p>
-    
-    ${filterHtml}
-
-    <div class="search-box">
-      <span class="search-icon">⌕</span>
-      <input type="text" class="search-input" placeholder="搜索邮件..." value="${escapeHtml(search || '')}">
-    </div>
+    ${filterMenuHtml}
+    ${searchBoxHtml}
 
     ${emails.length > 0 ? `
       <div class="email-list">
         ${items}
       </div>
     ` : `
-      <div class="empty">
+      <div class="empty" style="margin-top: 40px;">
         <div class="empty-icon">📭</div>
         <div class="empty-text">没有邮件</div>
       </div>
     `}
+
+    <style>
+      /* 筛选菜单 */
+      .filter-menu {
+        position: fixed;
+        bottom: 100px;
+        left: 50%;
+        transform: translateX(-50%);
+        background: var(--bg-card);
+        border-radius: var(--radius);
+        padding: 12px;
+        box-shadow: 0 8px 32px rgba(0,0,0,0.12);
+        z-index: 1001;
+        min-width: 180px;
+      }
+      .filter-menu-content {
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+      }
+      .filter-menu-item {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        padding: 10px 14px;
+        border-radius: var(--radius-sm);
+        font-size: 14px;
+        color: var(--text);
+        text-decoration: none;
+        transition: all 0.2s ease;
+      }
+      .filter-menu-item:hover {
+        background: var(--hover-bg);
+      }
+      .filter-menu-item.active {
+        background: rgba(153, 77, 97, 0.1);
+        color: var(--accent);
+      }
+      .filter-menu-icon {
+        width: 18px;
+        height: 18px;
+      }
+
+      /* 搜索框 */
+      .search-box-popup {
+        position: fixed;
+        top: 24px;
+        left: 50%;
+        transform: translateX(-50%);
+        width: calc(100% - 48px);
+        max-width: 600px;
+        background: var(--bg-card);
+        border-radius: var(--radius);
+        padding: 16px 20px;
+        box-shadow: 0 8px 32px rgba(0,0,0,0.12);
+        z-index: 1001;
+      }
+      .search-box-content {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+      }
+      .search-box-icon {
+        width: 20px;
+        height: 20px;
+        color: var(--text-muted);
+        flex-shrink: 0;
+      }
+      .search-box-input {
+        flex: 1;
+        padding: 8px 0;
+        border: none;
+        font-size: 16px;
+        background: transparent;
+        color: var(--text);
+        outline: none;
+      }
+      .search-box-input::placeholder {
+        color: var(--text-muted);
+      }
+      .search-box-btn {
+        padding: 8px 16px;
+        background: var(--accent);
+        color: white;
+        border: none;
+        border-radius: 20px;
+        font-size: 13px;
+        cursor: pointer;
+        transition: all 0.2s ease;
+      }
+      .search-box-btn:hover {
+        opacity: 0.9;
+      }
+      .search-box-btn.secondary {
+        background: var(--hover-bg);
+        color: var(--text);
+      }
+    </style>
   `;
 }
 
