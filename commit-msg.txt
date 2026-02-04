@@ -1,0 +1,8 @@
+feat: 整合历史代码功能，保持 Koobai UI 风格
+
+- 使用 postal-mime 解析邮件（支持多种格式）
+- 完整的 email_logs 日志系统（处理时间、错误堆栈）
+- 标签和分类功能（tags + email_tags 表）
+- 修正 forward_history 表结构
+- 详细的邮件处理流程日志
+- 重复邮件更新逻辑

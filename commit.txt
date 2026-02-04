@@ -1,8 +1,0 @@
-fix: improve database compatibility and logging system
-
-- Update addLog() to dynamically detect email_logs table structure
-- Update getLogs() to handle various table schemas with field mapping
-- Add forward_history recording for email receive tracking
-- Add error handling for missing tables
-- Maintain backward compatibility with memory logs fallback
-- All 7 database tables now properly utilized
