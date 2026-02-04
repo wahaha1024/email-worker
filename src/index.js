@@ -437,10 +437,30 @@ async function handleEmailView(request, emailId, env) {
 }
 
 async function handleLogsPage(request, env) {
+  // 获取日志和统计数据
   const logs = await getLogs(env, 50);
+
+  // 获取统计信息
+  let stats = { total: 0, success: 0, failed: 0, duplicate: 0, processing: 0 };
+  try {
+    const { results } = await env.DB.prepare(`
+      SELECT status, COUNT(*) as count
+      FROM email_logs
+      WHERE status IN ('success', 'failed', 'duplicate', 'processing')
+      GROUP BY status
+    `).all();
+
+    results?.forEach(row => {
+      stats[row.status] = row.count;
+      stats.total += row.count;
+    });
+  } catch (e) {
+    console.log('Stats query failed:', e.message);
+  }
+
   const html = renderKoobaiPage({
     page: 'logs',
-    content: renderLogsContent(logs)
+    content: renderLogsContent(logs, stats)
   });
   return new Response(html, { headers: { 'Content-Type': 'text/html; charset=utf-8' } });
 }
@@ -1541,7 +1561,7 @@ function renderEmailDetail(email) {
 
 // ============ 日志页面 ============
 
-function renderLogsContent(logs) {
+function renderLogsContent(logs, stats = {}) {
   const statusLabels = {
     processing: '处理中',
     success: '成功',
@@ -1556,12 +1576,62 @@ function renderLogsContent(logs) {
     duplicate: '#3b82f6'
   };
 
+  // 过滤无用的"处理中"数据（无主题且处理中状态）
+  const filteredLogs = logs.filter(log => {
+    // 保留有主题的，或者非processing状态的
+    return log.action !== '(无主题)' || log.type !== 'processing';
+  });
+
+  // 计算成功率
+  const successRate = stats.total > 0
+    ? Math.round((stats.success / stats.total) * 100)
+    : 0;
+
   return `
     <h1 class="page-title">邮件处理日志</h1>
-    <p class="page-subtitle">最近 ${logs.length} 封邮件的处理记录 · <a href="/api/stats" style="color: var(--accent);">查看统计</a></p>
+
+    <!-- 统计小组件 -->
+    <div class="stats-grid">
+      <div class="stat-card stat-total">
+        <div class="stat-icon" data-lucide="mail"></div>
+        <div class="stat-content">
+          <div class="stat-value">${stats.total}</div>
+          <div class="stat-label">总处理</div>
+        </div>
+      </div>
+      <div class="stat-card stat-success">
+        <div class="stat-icon" data-lucide="check-circle"></div>
+        <div class="stat-content">
+          <div class="stat-value">${stats.success}</div>
+          <div class="stat-label">成功</div>
+        </div>
+        <div class="stat-badge" style="background: #22c55e20; color: #22c55e">${successRate}%</div>
+      </div>
+      <div class="stat-card stat-failed">
+        <div class="stat-icon" data-lucide="x-circle"></div>
+        <div class="stat-content">
+          <div class="stat-value">${stats.failed}</div>
+          <div class="stat-label">失败</div>
+        </div>
+      </div>
+      <div class="stat-card stat-duplicate">
+        <div class="stat-icon" data-lucide="copy"></div>
+        <div class="stat-content">
+          <div class="stat-value">${stats.duplicate}</div>
+          <div class="stat-label">重复</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="logs-divider"></div>
+
+    <div class="logs-header">
+      <h2 class="logs-title">最近记录</h2>
+      <span class="logs-count">${filteredLogs.length} 条</span>
+    </div>
 
     <div class="email-logs-list">
-      ${logs.length > 0 ? logs.map(log => `
+      ${filteredLogs.length > 0 ? filteredLogs.map(log => `
         <div class="email-log-item">
           <div class="email-log-header">
             <div class="email-log-status" style="background: ${statusColors[log.type] || '#999'}20; color: ${statusColors[log.type] || '#999'}">
@@ -1575,7 +1645,7 @@ function renderLogsContent(logs) {
           ${log.error ? `<div class="email-log-error">${escapeHtml(log.error)}</div>` : ''}
         </div>
       `).join('') : `
-        <div class="empty">
+        <div class="empty" style="margin-top: 20px;">
           <div class="empty-icon">◈</div>
           <div class="empty-text">暂无邮件处理记录</div>
         </div>
@@ -1583,6 +1653,102 @@ function renderLogsContent(logs) {
     </div>
 
     <style>
+      /* 统计小组件 */
+      .stats-grid {
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        gap: 12px;
+        margin-bottom: 24px;
+      }
+      @media (max-width: 600px) {
+        .stats-grid {
+          grid-template-columns: repeat(2, 1fr);
+        }
+      }
+      .stat-card {
+        background: var(--bg-card);
+        border-radius: var(--radius);
+        padding: 16px;
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.04);
+        position: relative;
+      }
+      .stat-icon {
+        width: 40px;
+        height: 40px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        border-radius: 12px;
+        background: var(--hover-bg);
+        color: var(--text-secondary);
+      }
+      .stat-icon svg {
+        width: 24px;
+        height: 24px;
+      }
+      .stat-success .stat-icon {
+        background: #22c55e20;
+        color: #22c55e;
+      }
+      .stat-failed .stat-icon {
+        background: #ef444420;
+        color: #ef4444;
+      }
+      .stat-duplicate .stat-icon {
+        background: #3b82f620;
+        color: #3b82f6;
+      }
+      .stat-content {
+        flex: 1;
+      }
+      .stat-value {
+        font-size: 24px;
+        font-weight: 600;
+        color: var(--text);
+        line-height: 1.2;
+      }
+      .stat-label {
+        font-size: 13px;
+        color: var(--text-muted);
+        margin-top: 2px;
+      }
+      .stat-badge {
+        position: absolute;
+        top: 12px;
+        right: 12px;
+        padding: 2px 8px;
+        border-radius: 10px;
+        font-size: 12px;
+        font-weight: 500;
+      }
+
+      /* 分隔线 */
+      .logs-divider {
+        height: 1px;
+        background: var(--border);
+        margin: 0 0 20px 0;
+      }
+
+      /* 日志头部 */
+      .logs-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        margin-bottom: 16px;
+      }
+      .logs-title {
+        font-size: 17px;
+        font-weight: 500;
+        color: var(--text);
+      }
+      .logs-count {
+        font-size: 13px;
+        color: var(--text-muted);
+      }
+
       .email-logs-list {
         display: flex;
         flex-direction: column;
