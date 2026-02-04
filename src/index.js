@@ -577,9 +577,7 @@ function renderKoobaiPage({ page, emailId, content }) {
   const actionButtons = isInbox ? [
     { id: 'filter', icon: 'filter', label: '筛选', onclick: 'toggleFilterMenu()' },
     { id: 'search', icon: 'search', label: '搜索', onclick: 'toggleSearchBox()' },
-    { id: 'select', icon: 'square', label: '选择', onclick: 'toggleSelect()' },
-    { id: 'read', icon: 'check', label: '已读', onclick: 'markRead()', disabled: true },
-    { id: 'delete', icon: 'trash-2', label: '删除', onclick: 'doDelete()', disabled: true },
+    { id: 'edit', icon: 'pen-square', label: '编辑', onclick: 'toggleEditMenu()' },
   ] : isView ? [
     { id: 'back', icon: 'arrow-left', label: '返回', onclick: 'history.back()' },
     { id: 'forward', icon: 'forward', label: '转发', onclick: `forwardEmail(${emailId})` },
@@ -1007,6 +1005,7 @@ body {
   let currentForwardId = null;
   let filterMenuOpen = false;
   let searchBoxOpen = false;
+  let editMenuOpen = false;
 
   // 切换筛选菜单
   function toggleFilterMenu() {
@@ -1052,6 +1051,75 @@ body {
     if (searchBoxOpen && filterMenuOpen) {
       toggleFilterMenu();
     }
+
+    // 关闭编辑菜单
+    if (searchBoxOpen && editMenuOpen) {
+      toggleEditMenu();
+    }
+  }
+
+  // 切换编辑菜单
+  function toggleEditMenu() {
+    editMenuOpen = !editMenuOpen;
+    const menu = document.getElementById('editMenu');
+    const btn = document.getElementById('editBtn');
+
+    if (menu) {
+      menu.style.display = editMenuOpen ? 'block' : 'none';
+    }
+    if (btn) {
+      if (editMenuOpen) btn.classList.add('active');
+      else btn.classList.remove('active');
+    }
+
+    // 关闭其他菜单
+    if (editMenuOpen && filterMenuOpen) {
+      toggleFilterMenu();
+    }
+    if (editMenuOpen && searchBoxOpen) {
+      toggleSearchBox();
+    }
+  }
+
+  // 从编辑菜单触发选择模式
+  function toggleSelectFromMenu() {
+    toggleSelect();
+    // 关闭编辑菜单
+    toggleEditMenu();
+  }
+
+  // 从编辑菜单触发标记已读
+  function markReadFromMenu() {
+    markRead();
+    toggleEditMenu();
+  }
+
+  // 从编辑菜单触发删除
+  function deleteFromMenu() {
+    doDelete();
+    toggleEditMenu();
+  }
+
+  // 更新编辑菜单按钮状态
+  function updateEditMenuButtons() {
+    const count = selectedIds.size;
+    const readBtn = document.getElementById('editReadBtn');
+    const deleteBtn = document.getElementById('editDeleteBtn');
+    const selectBtn = document.getElementById('editSelectBtn');
+
+    if (readBtn) readBtn.disabled = count === 0;
+    if (deleteBtn) deleteBtn.disabled = count === 0;
+
+    // 更新选择按钮图标和文字
+    if (selectBtn) {
+      const icon = selectBtn.querySelector('[data-lucide]');
+      if (selectMode) {
+        selectBtn.innerHTML = '<span data-lucide="check-square" class="edit-menu-icon"></span><span>退出选择</span>';
+      } else {
+        selectBtn.innerHTML = '<span data-lucide="square" class="edit-menu-icon"></span><span>选择邮件</span>';
+      }
+      if (typeof lucide !== 'undefined') lucide.createIcons();
+    }
   }
 
   // 执行搜索
@@ -1080,22 +1148,18 @@ body {
   function toggleSelect() {
     selectMode = !selectMode;
     const list = document.querySelector('.email-list');
-    const btn = document.getElementById('selectBtn');
-    const icon = btn.querySelector('[data-lucide]');
 
     if (selectMode) {
       list.classList.add('select-mode');
-      btn.classList.add('active');
-      if (icon) icon.setAttribute('data-lucide', 'check-square');
     } else {
       list.classList.remove('select-mode');
-      btn.classList.remove('active');
-      if (icon) icon.setAttribute('data-lucide', 'square');
       document.querySelectorAll('.email-checkbox').forEach(cb => cb.checked = false);
       selectedIds.clear();
       updateButtons();
     }
-    if (typeof lucide !== 'undefined') lucide.createIcons();
+
+    // 更新编辑菜单按钮状态
+    updateEditMenuButtons();
   }
 
   function updateSelection() {
@@ -1106,8 +1170,8 @@ body {
 
   function updateButtons() {
     const count = selectedIds.size;
-    document.getElementById('readBtn').disabled = count === 0;
-    document.getElementById('deleteBtn').disabled = count === 0;
+    // 更新编辑菜单按钮状态
+    updateEditMenuButtons();
   }
 
   async function markRead() {
@@ -1262,9 +1326,30 @@ function renderEmailList(emails, filters = {}) {
     </div>
   `;
 
+  // 编辑菜单（默认隐藏，点击编辑按钮显示）
+  const editMenuHtml = `
+    <div id="editMenu" class="edit-menu" style="display: none;">
+      <div class="edit-menu-content">
+        <button class="edit-menu-item" id="editSelectBtn" onclick="toggleSelectFromMenu()">
+          <span data-lucide="square" class="edit-menu-icon"></span>
+          <span>选择邮件</span>
+        </button>
+        <button class="edit-menu-item" id="editReadBtn" onclick="markReadFromMenu()" disabled>
+          <span data-lucide="check" class="edit-menu-icon"></span>
+          <span>标记已读</span>
+        </button>
+        <button class="edit-menu-item" id="editDeleteBtn" onclick="deleteFromMenu()" disabled>
+          <span data-lucide="trash-2" class="edit-menu-icon"></span>
+          <span>删除邮件</span>
+        </button>
+      </div>
+    </div>
+  `;
+
   return `
     ${filterMenuHtml}
     ${searchBoxHtml}
+    ${editMenuHtml}
 
     ${emails.length > 0 ? `
       <div class="email-list">
@@ -1315,6 +1400,55 @@ function renderEmailList(emails, filters = {}) {
         color: var(--accent);
       }
       .filter-menu-icon {
+        width: 18px;
+        height: 18px;
+      }
+
+      /* 编辑菜单 */
+      .edit-menu {
+        position: fixed;
+        bottom: 100px;
+        left: 50%;
+        transform: translateX(-50%);
+        background: var(--bg-card);
+        border-radius: var(--radius);
+        padding: 12px;
+        box-shadow: 0 8px 32px rgba(0,0,0,0.12);
+        z-index: 1001;
+        min-width: 180px;
+      }
+      .edit-menu-content {
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+      }
+      .edit-menu-item {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        padding: 10px 14px;
+        border-radius: var(--radius-sm);
+        font-size: 14px;
+        color: var(--text);
+        background: transparent;
+        border: none;
+        cursor: pointer;
+        transition: all 0.2s ease;
+        text-align: left;
+        width: 100%;
+      }
+      .edit-menu-item:hover:not(:disabled) {
+        background: var(--hover-bg);
+      }
+      .edit-menu-item:disabled {
+        opacity: 0.4;
+        cursor: not-allowed;
+      }
+      .edit-menu-item.active {
+        background: rgba(153, 77, 97, 0.1);
+        color: var(--accent);
+      }
+      .edit-menu-icon {
         width: 18px;
         height: 18px;
       }
