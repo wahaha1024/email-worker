@@ -354,6 +354,7 @@ async function handleRequest(request, env) {
   if (path === '/api/debug') return handleDebug(request, env);
   if (path === '/api/stats') return handleStats(request, env);
   if (path.startsWith('/api/logs/')) return handleLogDetail(request, path.split('/')[3], env);
+  if (path === '/diagnostics') return handleDiagnosticsPage(request, env);
 
   return new Response('Not Found', { status: 404 });
 }
@@ -468,6 +469,57 @@ async function handleStats(request, env) {
   }
 }
 
+async function handleDiagnosticsPage(request, env) {
+  // 获取诊断数据
+  const diagnostics = {
+    timestamp: new Date().toISOString(),
+    tables: [],
+    emails: { total: 0, unread: 0, today: 0 },
+    recentLogs: [],
+    recentFailures: []
+  };
+
+  try {
+    const { results } = await env.DB.prepare("SELECT name FROM sqlite_master WHERE type='table'").all();
+    diagnostics.tables = results ? results.map(r => r.name) : [];
+  } catch (e) {}
+
+  try {
+    const { results } = await env.DB.prepare('SELECT COUNT(*) as count FROM emails').all();
+    diagnostics.emails.total = results ? results[0].count : 0;
+  } catch (e) {}
+
+  try {
+    const { results } = await env.DB.prepare('SELECT COUNT(*) as count FROM emails WHERE is_read = 0 AND is_deleted = 0').all();
+    diagnostics.emails.unread = results ? results[0].count : 0;
+  } catch (e) {}
+
+  try {
+    const { results } = await env.DB.prepare(`
+      SELECT received_at, sender, subject, status, error_message, processing_time_ms
+      FROM email_logs 
+      ORDER BY received_at DESC 
+      LIMIT 20
+    `).all();
+    diagnostics.recentLogs = results || [];
+  } catch (e) {}
+
+  try {
+    const { results } = await env.DB.prepare(`
+      SELECT received_at, sender, subject, status, error_message 
+      FROM email_logs 
+      WHERE status IN ('failed', 'error', 'processing')
+      ORDER BY received_at DESC 
+      LIMIT 10
+    `).all();
+    diagnostics.recentFailures = results || [];
+  } catch (e) {}
+
+  const content = renderDiagnosticsContent(diagnostics);
+  const html = renderKoobaiPage({ page: 'diagnostics', content });
+  return new Response(html, { headers: { 'Content-Type': 'text/html; charset=utf-8' } });
+}
+
 async function handleLogDetail(request, logId, env) {
   try {
     const log = await env.DB.prepare('SELECT * FROM email_logs WHERE id = ?').bind(logId).first();
@@ -514,10 +566,11 @@ function renderKoobaiPage({ page, emailId, content }) {
   const isInbox = page === 'inbox';
   const isLogs = page === 'logs';
   const isView = page === 'view';
+  const isDiagnostics = page === 'diagnostics';
 
   const navButtons = [
     { id: 'inbox', icon: 'mail', label: '收件箱', href: '/', active: isInbox },
-    { id: 'logs', icon: 'activity', label: '日志', href: '/logs', active: isLogs },
+    { id: 'logs', icon: 'activity', label: '日志', href: '/logs', active: isLogs || isDiagnostics },
     { id: 'rss', icon: 'rss', label: '订阅', href: '/rss', active: false },
   ];
 
@@ -1180,7 +1233,7 @@ function renderEmailDetail(email) {
 function renderLogsContent(logs) {
   return `
     <h1 class="page-title">系统日志</h1>
-    <p class="page-subtitle">最近 ${logs.length} 条记录 · <a href="/api/stats" style="color: var(--accent);">查看统计</a></p>
+    <p class="page-subtitle">最近 ${logs.length} 条记录 · <a href="/api/stats" style="color: var(--accent);">查看统计</a> · <a href="/diagnostics" style="color: var(--accent);">诊断页面</a></p>
 
     <div class="logs-list">
       ${logs.length > 0 ? logs.map(log => `
@@ -1198,6 +1251,307 @@ function renderLogsContent(logs) {
         </div>
       `}
     </div>
+  `;
+}
+
+// ============ 诊断页面 ============
+
+function renderDiagnosticsContent(data) {
+  const statusColors = {
+    success: '#22c55e',
+    failed: '#ef4444',
+    error: '#ef4444',
+    processing: '#f59e0b',
+    duplicate: '#3b82f6',
+    receive: '#8b5cf6'
+  };
+
+  return `
+    <h1 class="page-title">系统诊断</h1>
+    <p class="page-subtitle">邮件系统状态检查 · ${new Date(data.timestamp).toLocaleString('zh-CN')}</p>
+
+    <div class="diagnostics-grid">
+      <!-- 邮件统计卡片 -->
+      <div class="diag-card">
+        <div class="diag-card-title">
+          <span data-lucide="mail" class="diag-icon"></span>
+          邮件统计
+        </div>
+        <div class="diag-stats">
+          <div class="diag-stat">
+            <div class="diag-stat-value">${data.emails.total}</div>
+            <div class="diag-stat-label">总邮件数</div>
+          </div>
+          <div class="diag-stat">
+            <div class="diag-stat-value">${data.emails.unread}</div>
+            <div class="diag-stat-label">未读邮件</div>
+          </div>
+          <div class="diag-stat">
+            <div class="diag-stat-value">${data.emails.today}</div>
+            <div class="diag-stat-label">今日收到</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 数据库表状态 -->
+      <div class="diag-card">
+        <div class="diag-card-title">
+          <span data-lucide="database" class="diag-icon"></span>
+          数据库表
+        </div>
+        <div class="diag-tables">
+          ${data.tables.map(t => `
+            <span class="diag-table-tag ${t.startsWith('email') ? 'active' : ''}">${t}</span>
+          `).join('')}
+        </div>
+      </div>
+
+      <!-- 最近失败记录 -->
+      <div class="diag-card diag-card-full">
+        <div class="diag-card-title">
+          <span data-lucide="alert-circle" class="diag-icon"></span>
+          最近异常记录
+          ${data.recentFailures.length > 0 ? `<span class="diag-badge error">${data.recentFailures.length}</span>` : ''}
+        </div>
+        ${data.recentFailures.length > 0 ? `
+          <div class="diag-failures">
+            ${data.recentFailures.map(f => `
+              <div class="diag-failure-item">
+                <div class="diag-failure-header">
+                  <span class="diag-failure-time">${formatShortTime(f.received_at)}</span>
+                  <span class="diag-failure-status" style="background: ${statusColors[f.status] || '#999'}20; color: ${statusColors[f.status] || '#999'}">${f.status}</span>
+                </div>
+                <div class="diag-failure-subject">${escapeHtml(f.subject || '(无主题)')}</div>
+                <div class="diag-failure-sender">${escapeHtml(f.sender || '未知')}</div>
+                ${f.error_message ? `<div class="diag-failure-error">${escapeHtml(f.error_message)}</div>` : ''}
+              </div>
+            `).join('')}
+          </div>
+        ` : '<div class="diag-empty">暂无异常记录 ✓</div>'}
+      </div>
+
+      <!-- 最近日志 -->
+      <div class="diag-card diag-card-full">
+        <div class="diag-card-title">
+          <span data-lucide="activity" class="diag-icon"></span>
+          最近处理记录
+        </div>
+        <div class="diag-logs">
+          ${data.recentLogs.map(log => `
+            <div class="diag-log-item">
+              <span class="diag-log-time">${formatShortTime(log.received_at)}</span>
+              <span class="diag-log-status" style="background: ${statusColors[log.status] || '#999'}20; color: ${statusColors[log.status] || '#999'}">${log.status}</span>
+              <span class="diag-log-subject" title="${escapeHtml(log.subject || '')}">${escapeHtml(log.subject || '(无主题)')}</span>
+              <span class="diag-log-sender">${escapeHtml(log.sender || '')}</span>
+              ${log.processing_time_ms ? `<span class="diag-log-time">${log.processing_time_ms}ms</span>` : ''}
+            </div>
+          `).join('')}
+        </div>
+      </div>
+
+      <!-- 检查清单 -->
+      <div class="diag-card diag-card-full">
+        <div class="diag-card-title">
+          <span data-lucide="check-circle" class="diag-icon"></span>
+          故障排查检查清单
+        </div>
+        <div class="diag-checklist">
+          <div class="diag-check-item">
+            <span class="diag-check-status ${data.tables.includes('emails') ? 'ok' : 'error'}"></span>
+            <span>emails 表存在</span>
+          </div>
+          <div class="diag-check-item">
+            <span class="diag-check-status ${data.tables.includes('email_logs') ? 'ok' : 'error'}"></span>
+            <span>email_logs 表存在</span>
+          </div>
+          <div class="diag-check-item">
+            <span class="diag-check-status ${data.emails.total > 0 ? 'ok' : 'warning'}"></span>
+            <span>有历史邮件数据 (${data.emails.total} 封)</span>
+          </div>
+          <div class="diag-check-item">
+            <span class="diag-check-status ${data.recentLogs.length > 0 ? 'ok' : 'warning'}"></span>
+            <span>有邮件处理日志 (${data.recentLogs.length} 条)</span>
+          </div>
+          <div class="diag-check-item">
+            <span class="diag-check-status ${data.recentFailures.length === 0 ? 'ok' : 'error'}"></span>
+            <span>无最近失败记录</span>
+          </div>
+        </div>
+        <div class="diag-hint">
+          <strong>如果未收到新邮件：</strong><br>
+          1. 检查 Cloudflare Email Routing 是否已启用并指向此 Worker<br>
+          2. 检查域名 DNS 的 MX 记录是否正确配置<br>
+          3. 检查垃圾邮件文件夹<br>
+          4. 发送测试邮件后刷新此页面查看日志
+        </div>
+      </div>
+    </div>
+
+    <style>
+      .diagnostics-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+        gap: 16px;
+        margin-top: 24px;
+      }
+      .diag-card {
+        background: var(--bg-card);
+        border-radius: var(--radius);
+        padding: 20px;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.04);
+      }
+      .diag-card-full {
+        grid-column: 1 / -1;
+      }
+      .diag-card-title {
+        font-size: 15px;
+        font-weight: 500;
+        color: var(--text);
+        margin-bottom: 16px;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+      .diag-icon {
+        width: 18px;
+        height: 18px;
+        color: var(--accent);
+      }
+      .diag-stats {
+        display: flex;
+        gap: 24px;
+      }
+      .diag-stat-value {
+        font-size: 28px;
+        font-weight: 600;
+        color: var(--text);
+      }
+      .diag-stat-label {
+        font-size: 13px;
+        color: var(--text-muted);
+        margin-top: 4px;
+      }
+      .diag-tables {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+      }
+      .diag-table-tag {
+        padding: 4px 10px;
+        background: var(--hover-bg);
+        border-radius: 20px;
+        font-size: 12px;
+        color: var(--text-secondary);
+      }
+      .diag-table-tag.active {
+        background: rgba(153, 77, 97, 0.1);
+        color: var(--accent);
+      }
+      .diag-badge {
+        margin-left: auto;
+        padding: 2px 8px;
+        border-radius: 10px;
+        font-size: 11px;
+        font-weight: 500;
+      }
+      .diag-badge.error {
+        background: #fee2e2;
+        color: #991b1b;
+      }
+      .diag-failures, .diag-logs {
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+      }
+      .diag-failure-item, .diag-log-item {
+        padding: 12px;
+        background: var(--hover-bg);
+        border-radius: 8px;
+        font-size: 13px;
+      }
+      .diag-failure-header, .diag-log-item {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        flex-wrap: wrap;
+      }
+      .diag-failure-time, .diag-log-time {
+        color: var(--text-muted);
+        font-family: JetBrainsMono, monospace;
+        font-size: 12px;
+      }
+      .diag-failure-status, .diag-log-status {
+        padding: 2px 8px;
+        border-radius: 4px;
+        font-size: 11px;
+        font-weight: 500;
+        text-transform: uppercase;
+      }
+      .diag-failure-subject, .diag-log-subject {
+        font-weight: 500;
+        color: var(--text);
+        flex: 1;
+        min-width: 200px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .diag-failure-sender, .diag-log-sender {
+        color: var(--text-secondary);
+      }
+      .diag-failure-error {
+        margin-top: 8px;
+        padding: 8px;
+        background: #fee2e2;
+        color: #991b1b;
+        border-radius: 4px;
+        font-family: JetBrainsMono, monospace;
+        font-size: 12px;
+        overflow-x: auto;
+      }
+      .diag-empty {
+        text-align: center;
+        padding: 24px;
+        color: #22c55e;
+        font-size: 14px;
+      }
+      .diag-checklist {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+        gap: 12px;
+        margin-bottom: 16px;
+      }
+      .diag-check-item {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        font-size: 13px;
+        color: var(--text-secondary);
+      }
+      .diag-check-status {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background: #999;
+      }
+      .diag-check-status.ok {
+        background: #22c55e;
+      }
+      .diag-check-status.error {
+        background: #ef4444;
+      }
+      .diag-check-status.warning {
+        background: #f59e0b;
+      }
+      .diag-hint {
+        padding: 16px;
+        background: rgba(153, 77, 97, 0.05);
+        border-radius: 8px;
+        font-size: 13px;
+        line-height: 1.8;
+        color: var(--text-secondary);
+      }
+    </style>
   `;
 }
 
@@ -1333,26 +1687,93 @@ async function handleClearLogs(request, env) {
 }
 
 async function handleDebug(request, env) {
+  const startTime = Date.now();
+  const diagnostics = {
+    success: true,
+    timestamp: new Date().toISOString(),
+    worker: {
+      name: 'email',
+      version: '2.0',
+      compatibility_date: '2026-01-24'
+    }
+  };
+
+  // 检查数据库表
   let tables = [];
   try {
     const { results } = await env.DB.prepare("SELECT name FROM sqlite_master WHERE type='table'").all();
     tables = results ? results.map(r => r.name) : [];
+    diagnostics.tables = tables;
   } catch (e) {
-    tables = ['error: ' + e.message];
+    diagnostics.tables = ['error: ' + e.message];
   }
 
-  let emailCount = 0;
+  // 邮件统计
   try {
     const { results } = await env.DB.prepare('SELECT COUNT(*) as count FROM emails').all();
-    emailCount = results ? results[0].count : 0;
+    diagnostics.emails = {
+      total: results ? results[0].count : 0
+    };
   } catch (e) {
-    emailCount = -1;
+    diagnostics.emails = { error: e.message };
   }
 
-  return new Response(JSON.stringify({
-    success: true,
-    tables,
-    emailCount,
-    logsInMemory: operationLogs.length
-  }), { headers: { 'Content-Type': 'application/json' } });
+  // 未读邮件数
+  try {
+    const { results } = await env.DB.prepare('SELECT COUNT(*) as count FROM emails WHERE is_read = 0 AND is_deleted = 0').all();
+    diagnostics.emails.unread = results ? results[0].count : 0;
+  } catch (e) {}
+
+  // 今日邮件数
+  try {
+    const { results } = await env.DB.prepare(`
+      SELECT COUNT(*) as count FROM emails 
+      WHERE date(date_received) = date('now', 'localtime')
+    `).all();
+    diagnostics.emails.today = results ? results[0].count : 0;
+  } catch (e) {}
+
+  // 最近日志（内存）
+  diagnostics.logsInMemory = operationLogs.length;
+  diagnostics.recentLogs = operationLogs.slice(0, 10).map(log => ({
+    timestamp: log.timestamp,
+    type: log.type,
+    action: log.action
+  }));
+
+  // 数据库日志统计
+  try {
+    const { results } = await env.DB.prepare('SELECT COUNT(*) as count FROM email_logs').all();
+    diagnostics.logsInDB = results ? results[0].count : 0;
+  } catch (e) {
+    diagnostics.logsInDB = 0;
+  }
+
+  // 最近的失败记录
+  try {
+    const { results } = await env.DB.prepare(`
+      SELECT received_at, sender, subject, status, error_message 
+      FROM email_logs 
+      WHERE status = 'failed' OR status = 'error'
+      ORDER BY received_at DESC 
+      LIMIT 5
+    `).all();
+    diagnostics.recentFailures = results || [];
+  } catch (e) {
+    diagnostics.recentFailures = [];
+  }
+
+  // 转发历史统计
+  try {
+    const { results } = await env.DB.prepare('SELECT COUNT(*) as count FROM forward_history').all();
+    diagnostics.forwardHistory = { count: results ? results[0].count : 0 };
+  } catch (e) {
+    diagnostics.forwardHistory = { error: e.message };
+  }
+
+  diagnostics.queryTime = Date.now() - startTime;
+
+  return new Response(JSON.stringify(diagnostics, null, 2), {
+    headers: { 'Content-Type': 'application/json' }
+  });
 }

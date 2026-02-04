@@ -20,5 +20,13 @@
       "database_name": "email_db",
       "database_id": "a79d1a10-f57c-4db3-a9f6-f2abf5ba84fa"
     }
-  ]
+  ],
+  "triggers": {
+    "email": [
+      {
+        "name": "catch-all",
+        "destination": "*@zjyyy.top"
+      }
+    ]
+  }
 }
