@@ -43,12 +43,13 @@ async function addLog(env, type, action, details = {}) {
   }
 }
 
-// 获取日志（从数据库）
+// 获取邮件处理日志（从数据库）
 async function getLogs(env, limit = 50) {
   try {
     if (env.DB) {
       const { results } = await env.DB.prepare(`
         SELECT * FROM email_logs 
+        WHERE status IN ('processing', 'success', 'failed', 'duplicate')
         ORDER BY received_at DESC 
         LIMIT ?
       `).bind(limit).all();
@@ -57,13 +58,14 @@ async function getLogs(env, limit = 50) {
         id: row.id,
         timestamp: row.received_at || row.created_at,
         type: row.status || 'info',
-        action: row.subject || row.action || '',
-        details: JSON.stringify({
-          sender: row.sender,
-          recipient: row.recipient,
-          error: row.error_message,
-          processing_time: row.processing_time_ms
-        })
+        action: row.subject || '(无主题)',
+        sender: row.sender || '',
+        recipient: row.recipient || '',
+        error: row.error_message || null,
+        processing_time: row.processing_time_ms || 0,
+        raw_size: row.raw_size || 0,
+        parsed_success: row.parsed_success === 1,
+        db_insert_success: row.db_insert_success === 1
       }));
     }
   } catch (e) {
@@ -316,13 +318,10 @@ export default {
 
   // HTTP 访问
   async fetch(request, env) {
-    const url = new URL(request.url);
-    await addLog(env, 'request', `${request.method} ${url.pathname}`, { query: url.search });
-    
     try {
       return await handleRequest(request, env);
     } catch (error) {
-      await addLog(env, 'error', error.message, { stack: error.stack });
+      console.error('Request error:', error);
       return new Response(renderErrorPage(error.message), { status: 500 });
     }
   }
@@ -377,11 +376,11 @@ async function handleReceiveEmail(request, env) {
     const messageId = headers.match(/Message-ID:\s*<([^>]+)>/)?.[1] ||
       `msg_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
 
-    await addLog(env, 'receive', `收到邮件: ${subject}`, { from: senderEmail, to });
+    // HTTP 回调方式接收邮件，直接处理（日志由主邮件处理器统一记录）
 
     const existing = await env.DB.prepare('SELECT id FROM emails WHERE message_id = ?').bind(messageId).first();
     if (existing) {
-      await addLog(env, 'receive', `重复邮件更新: ${subject}`, { messageId });
+      // 重复邮件更新
       await env.DB.prepare(`
         UPDATE emails SET content_text = ?, content_html = ?, updated_at = datetime('now')
         WHERE message_id = ?
@@ -396,12 +395,10 @@ async function handleReceiveEmail(request, env) {
       VALUES (?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'), 'inbox', 0, '[]')
     `).bind(messageId, subject, senderEmail, senderName, text, html).run();
 
-    await addLog(env, 'receive', `邮件已保存: ${subject}`, { from: senderEmail });
     return new Response(JSON.stringify({ success: true, subject }), {
       headers: { 'Content-Type': 'application/json' }
     });
   } catch (error) {
-    await addLog(env, 'error', `邮件接收失败: ${error.message}`);
     return new Response(JSON.stringify({ success: false, error: error.message }), {
       status: 500, headers: { 'Content-Type': 'application/json' }
     });
@@ -433,7 +430,7 @@ async function handleEmailView(request, emailId, env) {
   if (!email) return new Response(renderKoobaiPage({ page: 'view', content: '<div class="empty">邮件不存在</div>' }), { status: 404 });
   
   await env.DB.prepare('UPDATE emails SET is_read = 1 WHERE id = ?').bind(emailId).run();
-  await addLog(env, 'read', `查看邮件: ${email.subject}`, { id: emailId });
+  // 不记录查看日志，只保留邮件接收处理日志
   
   const html = renderKoobaiPage({ page: 'view', emailId, content: renderEmailDetail(email) });
   return new Response(html, { headers: { 'Content-Type': 'text/html; charset=utf-8' } });
@@ -498,6 +495,7 @@ async function handleDiagnosticsPage(request, env) {
     const { results } = await env.DB.prepare(`
       SELECT received_at, sender, subject, status, error_message, processing_time_ms
       FROM email_logs 
+      WHERE status IN ('processing', 'success', 'failed', 'duplicate')
       ORDER BY received_at DESC 
       LIMIT 20
     `).all();
@@ -508,7 +506,7 @@ async function handleDiagnosticsPage(request, env) {
     const { results } = await env.DB.prepare(`
       SELECT received_at, sender, subject, status, error_message 
       FROM email_logs 
-      WHERE status IN ('failed', 'error', 'processing')
+      WHERE status IN ('failed', 'processing')
       ORDER BY received_at DESC 
       LIMIT 10
     `).all();
@@ -1544,26 +1542,96 @@ function renderEmailDetail(email) {
 // ============ 日志页面 ============
 
 function renderLogsContent(logs) {
-  return `
-    <h1 class="page-title">系统日志</h1>
-    <p class="page-subtitle">最近 ${logs.length} 条记录 · <a href="/api/stats" style="color: var(--accent);">查看统计</a> · <a href="/diagnostics" style="color: var(--accent);">诊断页面</a></p>
+  const statusLabels = {
+    processing: '处理中',
+    success: '成功',
+    failed: '失败',
+    duplicate: '重复'
+  };
 
-    <div class="logs-list">
+  const statusColors = {
+    processing: '#f59e0b',
+    success: '#22c55e',
+    failed: '#ef4444',
+    duplicate: '#3b82f6'
+  };
+
+  return `
+    <h1 class="page-title">邮件处理日志</h1>
+    <p class="page-subtitle">最近 ${logs.length} 封邮件的处理记录 · <a href="/api/stats" style="color: var(--accent);">查看统计</a></p>
+
+    <div class="email-logs-list">
       ${logs.length > 0 ? logs.map(log => `
-        <div class="log-item">
-          <div class="log-header">
-            <span class="log-time">${formatShortTime(log.timestamp)}</span>
-            <span class="log-type log-type-${log.type}">${log.type}</span>
+        <div class="email-log-item">
+          <div class="email-log-header">
+            <div class="email-log-status" style="background: ${statusColors[log.type] || '#999'}20; color: ${statusColors[log.type] || '#999'}">
+              ${statusLabels[log.type] || log.type}
+            </div>
+            <div class="email-log-time">${formatShortTime(log.timestamp)}</div>
+            ${log.processing_time > 0 ? `<div class="email-log-time">${log.processing_time}ms</div>` : ''}
           </div>
-          <div>${escapeHtml(log.action)}</div>
+          <div class="email-log-subject">${escapeHtml(log.action)}</div>
+          <div class="email-log-sender">${escapeHtml(log.sender || '')}</div>
+          ${log.error ? `<div class="email-log-error">${escapeHtml(log.error)}</div>` : ''}
         </div>
       `).join('') : `
         <div class="empty">
           <div class="empty-icon">◈</div>
-          <div class="empty-text">暂无日志</div>
+          <div class="empty-text">暂无邮件处理记录</div>
         </div>
       `}
     </div>
+
+    <style>
+      .email-logs-list {
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+      }
+      .email-log-item {
+        background: var(--bg-card);
+        padding: 16px 20px;
+        border-radius: var(--radius);
+        box-shadow: 0 1px 3px rgba(0,0,0,0.04);
+      }
+      .email-log-header {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        margin-bottom: 8px;
+      }
+      .email-log-status {
+        padding: 3px 10px;
+        border-radius: 6px;
+        font-size: 12px;
+        font-weight: 500;
+        text-transform: uppercase;
+      }
+      .email-log-time {
+        font-size: 12px;
+        color: var(--text-muted);
+        font-family: JetBrainsMono, monospace;
+      }
+      .email-log-subject {
+        font-size: 15px;
+        font-weight: 500;
+        color: var(--text);
+        margin-bottom: 4px;
+      }
+      .email-log-sender {
+        font-size: 13px;
+        color: var(--text-secondary);
+      }
+      .email-log-error {
+        margin-top: 8px;
+        padding: 8px 12px;
+        background: #fee2e2;
+        color: #991b1b;
+        border-radius: 6px;
+        font-size: 12px;
+        font-family: JetBrainsMono, monospace;
+      }
+    </style>
   `;
 }
 
@@ -1988,7 +2056,7 @@ async function handleRssFeed(request, env) {
 <description>邮件订阅</description>
 ${items}
 </channel>
-</rss>`, { headers: { 'Content-Type': 'application/rss+xml' } });
+</rss>`, { headers: { 'Content-Type': 'application/rss+xml; charset=utf-8' } });
 }
 
 async function handleClearLogs(request, env) {
@@ -2046,17 +2114,12 @@ async function handleDebug(request, env) {
     diagnostics.emails.today = results ? results[0].count : 0;
   } catch (e) {}
 
-  // 最近日志（内存）
-  diagnostics.logsInMemory = operationLogs.length;
-  diagnostics.recentLogs = operationLogs.slice(0, 10).map(log => ({
-    timestamp: log.timestamp,
-    type: log.type,
-    action: log.action
-  }));
-
-  // 数据库日志统计
+  // 数据库日志统计（只统计邮件处理日志）
   try {
-    const { results } = await env.DB.prepare('SELECT COUNT(*) as count FROM email_logs').all();
+    const { results } = await env.DB.prepare(`
+      SELECT COUNT(*) as count FROM email_logs 
+      WHERE status IN ('processing', 'success', 'failed', 'duplicate')
+    `).all();
     diagnostics.logsInDB = results ? results[0].count : 0;
   } catch (e) {
     diagnostics.logsInDB = 0;
@@ -2067,7 +2130,7 @@ async function handleDebug(request, env) {
     const { results } = await env.DB.prepare(`
       SELECT received_at, sender, subject, status, error_message 
       FROM email_logs 
-      WHERE status = 'failed' OR status = 'error'
+      WHERE status = 'failed'
       ORDER BY received_at DESC 
       LIMIT 5
     `).all();
