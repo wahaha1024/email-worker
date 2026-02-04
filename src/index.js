@@ -574,10 +574,6 @@ function renderKoobaiPage({ page, emailId, content }) {
     { id: 'rss', icon: 'rss', label: '订阅', href: '/rss', active: false },
   ];
 
-  // 动态获取当前筛选状态
-  const currentCategory = isInbox ? (new URLSearchParams(window?.location?.search)).get('category') || '' : '';
-  const currentIsRead = isInbox ? (new URLSearchParams(window?.location?.search)).get('is_read') : null;
-
   const actionButtons = isInbox ? [
     { id: 'filter', icon: 'filter', label: '筛选', onclick: 'toggleFilterMenu()' },
     { id: 'search', icon: 'search', label: '搜索', onclick: 'toggleSearchBox()' },
