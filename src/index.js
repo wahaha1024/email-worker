@@ -368,6 +368,7 @@ async function handleRequest(request, env) {
   if (path === '/api/articles') return handleGetArticles(request, env);
   if (path.startsWith('/article/')) return handleArticleView(request, path.split('/')[2], env);
   if (path === '/api/articles/mark-read') return handleMarkArticlesRead(request, env);
+  if (path === '/api/articles/delete') return handleDeleteArticles(request, env);
 
   // 合并视图
   if (path === '/api/unified') return handleUnifiedContent(request, env);
@@ -3216,7 +3217,7 @@ function renderUnifiedList(items, filters = {}) {
 
     return `
       <div class="email-item ${isUnread ? 'unread' : ''}" data-id="${item.id}" data-type="${item.type}">
-        <input type="checkbox" class="email-checkbox" value="${item.id}" onclick="event.stopPropagation(); updateSelection();">
+        <input type="checkbox" class="email-checkbox" value="${item.id}" data-type="${item.type}" onclick="event.stopPropagation(); updateSelection();">
         <div class="email-content-wrapper" onclick="if(!selectMode) location.href='${item.url}'">
           <div class="email-header-row">
             <div class="email-date">${formatKoobaiDate(item.date)}</div>
@@ -3238,24 +3239,81 @@ function renderUnifiedList(items, filters = {}) {
   // 类型筛选按钮
   const typeFilters = `
     <div class="type-filter-bar">
-      <a href="/?type=all" class="filter-type-btn ${contentType === 'all' ? 'active' : ''}">
+      <a href="/?type=all${search ? '&search=' + encodeURIComponent(search) : ''}" class="filter-type-btn ${contentType === 'all' ? 'active' : ''}">
         <span data-lucide="layers"></span>
         <span>全部</span>
       </a>
-      <a href="/?type=email" class="filter-type-btn ${contentType === 'email' ? 'active' : ''}">
+      <a href="/?type=email${search ? '&search=' + encodeURIComponent(search) : ''}" class="filter-type-btn ${contentType === 'email' ? 'active' : ''}">
         <span data-lucide="mail"></span>
         <span>邮件</span>
       </a>
-      <a href="/?type=rss" class="filter-type-btn ${contentType === 'rss' ? 'active' : ''}">
+      <a href="/?type=rss${search ? '&search=' + encodeURIComponent(search) : ''}" class="filter-type-btn ${contentType === 'rss' ? 'active' : ''}">
         <span data-lucide="rss"></span>
         <span>RSS</span>
       </a>
     </div>
   `;
 
+  // 筛选菜单（邮件专用）
+  const categories = [
+    { id: '', label: '全部', icon: 'inbox' },
+    { id: 'inbox', label: '收件箱', icon: 'mail' },
+    { id: 'important', label: '重要', icon: 'star' },
+    { id: 'unread', label: '未读', icon: 'circle' },
+  ];
+
+  const filterMenuHtml = `
+    <div id="filterMenu" class="filter-menu" style="display: none;">
+      <div class="filter-menu-content">
+        ${categories.map(cat => `
+          <a href="/?type=${contentType}${cat.id ? (cat.id === 'unread' ? '&is_read=0' : `&category=${cat.id}`) : ''}"
+             class="filter-menu-item ${(category === cat.id || (cat.id === 'unread' && isRead === '0')) ? 'active' : ''}">
+            <span data-lucide="${cat.icon}" class="filter-menu-icon"></span>
+            <span>${cat.label}</span>
+          </a>
+        `).join('')}
+      </div>
+    </div>
+  `;
+
+  // 搜索框
+  const searchBoxHtml = `
+    <div id="searchBox" class="search-box-popup" style="display: none;">
+      <div class="search-box-content">
+        <span data-lucide="search" class="search-box-icon"></span>
+        <input type="text" id="searchInput" class="search-box-input" placeholder="搜索邮件和文章..." value="${escapeHtml(search || '')}">
+        <button onclick="doSearch()" class="search-box-btn">搜索</button>
+        <button onclick="toggleSearchBox()" class="search-box-btn secondary">取消</button>
+      </div>
+    </div>
+  `;
+
+  // 编辑菜单
+  const editMenuHtml = `
+    <div id="editMenu" class="edit-menu" style="display: none;">
+      <div class="edit-menu-content">
+        <button class="edit-menu-item" id="editSelectBtn" onclick="toggleSelectFromMenu()">
+          <span data-lucide="square" class="edit-menu-icon"></span>
+          <span>选择内容</span>
+        </button>
+        <button class="edit-menu-item" id="editReadBtn" onclick="markReadFromMenu()" disabled>
+          <span data-lucide="check" class="edit-menu-icon"></span>
+          <span>标记已读</span>
+        </button>
+        <button class="edit-menu-item" id="editDeleteBtn" onclick="deleteFromMenu()" disabled>
+          <span data-lucide="trash-2" class="edit-menu-icon"></span>
+          <span>删除</span>
+        </button>
+      </div>
+    </div>
+  `;
+
   return `
+    ${filterMenuHtml}
+    ${searchBoxHtml}
+    ${editMenuHtml}
     ${typeFilters}
-    
+
     ${items.length > 0 ? `
       <div class="email-list">
         ${listItems}
@@ -3313,6 +3371,151 @@ function renderUnifiedList(items, filters = {}) {
         margin-left: 4px;
       }
 
+      /* 筛选菜单 */
+      .filter-menu {
+        position: fixed;
+        bottom: 100px;
+        left: 50%;
+        transform: translateX(-50%);
+        background: var(--bg-card);
+        border-radius: var(--radius);
+        padding: 12px;
+        box-shadow: 0 8px 32px rgba(0,0,0,0.12);
+        z-index: 1001;
+        min-width: 180px;
+      }
+      .filter-menu-content {
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+      }
+      .filter-menu-item {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        padding: 10px 14px;
+        border-radius: var(--radius-sm);
+        font-size: 14px;
+        color: var(--text);
+        text-decoration: none;
+        transition: all 0.2s ease;
+      }
+      .filter-menu-item:hover {
+        background: var(--hover-bg);
+      }
+      .filter-menu-item.active {
+        background: rgba(153, 77, 97, 0.1);
+        color: var(--accent);
+      }
+      .filter-menu-icon {
+        width: 18px;
+        height: 18px;
+      }
+
+      /* 编辑菜单 */
+      .edit-menu {
+        position: fixed;
+        bottom: 100px;
+        left: 50%;
+        transform: translateX(-50%);
+        background: var(--bg-card);
+        border-radius: var(--radius);
+        padding: 12px;
+        box-shadow: 0 8px 32px rgba(0,0,0,0.12);
+        z-index: 1001;
+        min-width: 180px;
+      }
+      .edit-menu-content {
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+      }
+      .edit-menu-item {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        padding: 10px 14px;
+        border-radius: var(--radius-sm);
+        font-size: 14px;
+        color: var(--text);
+        background: transparent;
+        border: none;
+        cursor: pointer;
+        transition: all 0.2s ease;
+        text-align: left;
+        width: 100%;
+      }
+      .edit-menu-item:hover:not(:disabled) {
+        background: var(--hover-bg);
+      }
+      .edit-menu-item:disabled {
+        opacity: 0.4;
+        cursor: not-allowed;
+      }
+      .edit-menu-item.active {
+        background: rgba(153, 77, 97, 0.1);
+        color: var(--accent);
+      }
+      .edit-menu-icon {
+        width: 18px;
+        height: 18px;
+      }
+
+      /* 搜索框 */
+      .search-box-popup {
+        position: fixed;
+        top: 24px;
+        left: 50%;
+        transform: translateX(-50%);
+        width: calc(100% - 48px);
+        max-width: 600px;
+        background: var(--bg-card);
+        border-radius: var(--radius);
+        padding: 16px 20px;
+        box-shadow: 0 8px 32px rgba(0,0,0,0.12);
+        z-index: 1001;
+      }
+      .search-box-content {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+      }
+      .search-box-icon {
+        width: 20px;
+        height: 20px;
+        color: var(--text-muted);
+        flex-shrink: 0;
+      }
+      .search-box-input {
+        flex: 1;
+        padding: 8px 0;
+        border: none;
+        font-size: 16px;
+        background: transparent;
+        color: var(--text);
+        outline: none;
+      }
+      .search-box-input::placeholder {
+        color: var(--text-muted);
+      }
+      .search-box-btn {
+        padding: 8px 16px;
+        background: var(--accent);
+        color: white;
+        border: none;
+        border-radius: 20px;
+        font-size: 13px;
+        cursor: pointer;
+        transition: all 0.2s ease;
+      }
+      .search-box-btn:hover {
+        opacity: 0.9;
+      }
+      .search-box-btn.secondary {
+        background: var(--hover-bg);
+        color: var(--text);
+      }
+
       @media (max-width: 600px) {
         .type-filter-bar { gap: 8px; padding: 8px; }
         .filter-type-btn { padding: 8px 12px; font-size: 13px; }
@@ -3324,6 +3527,263 @@ function renderUnifiedList(items, filters = {}) {
       if (typeof lucide !== 'undefined') {
         lucide.createIcons();
       }
+
+      // 全局变量
+      let selectMode = false;
+      let selectedIds = new Set();
+      let filterMenuOpen = false;
+      let searchBoxOpen = false;
+      let editMenuOpen = false;
+
+      // 切换筛选菜单
+      function toggleFilterMenu() {
+        filterMenuOpen = !filterMenuOpen;
+        const menu = document.getElementById('filterMenu');
+        const btn = document.getElementById('filterBtn');
+
+        if (menu) {
+          menu.style.display = filterMenuOpen ? 'block' : 'none';
+        }
+        if (btn) {
+          if (filterMenuOpen) btn.classList.add('active');
+          else btn.classList.remove('active');
+        }
+
+        // 关闭搜索框和编辑菜单
+        if (filterMenuOpen) {
+          if (searchBoxOpen) toggleSearchBox();
+          if (editMenuOpen) toggleEditMenu();
+        }
+      }
+
+      // 切换搜索框
+      function toggleSearchBox() {
+        searchBoxOpen = !searchBoxOpen;
+        const box = document.getElementById('searchBox');
+        const btn = document.getElementById('searchBtn');
+        const input = document.getElementById('searchInput');
+
+        if (box) {
+          box.style.display = searchBoxOpen ? 'block' : 'none';
+        }
+        if (btn) {
+          if (searchBoxOpen) btn.classList.add('active');
+          else btn.classList.remove('active');
+        }
+
+        // 聚焦输入框
+        if (searchBoxOpen && input) {
+          setTimeout(() => input.focus(), 100);
+        }
+
+        // 关闭其他菜单
+        if (searchBoxOpen) {
+          if (filterMenuOpen) toggleFilterMenu();
+          if (editMenuOpen) toggleEditMenu();
+        }
+      }
+
+      // 切换编辑菜单
+      function toggleEditMenu() {
+        editMenuOpen = !editMenuOpen;
+        const menu = document.getElementById('editMenu');
+        const btn = document.getElementById('editBtn');
+
+        if (menu) {
+          menu.style.display = editMenuOpen ? 'block' : 'none';
+        }
+        if (btn) {
+          if (editMenuOpen) btn.classList.add('active');
+          else btn.classList.remove('active');
+        }
+
+        // 关闭其他菜单
+        if (editMenuOpen) {
+          if (filterMenuOpen) toggleFilterMenu();
+          if (searchBoxOpen) toggleSearchBox();
+        }
+      }
+
+      // 执行搜索
+      function doSearch() {
+        const input = document.getElementById('searchInput');
+        const query = input ? input.value.trim() : '';
+        const currentType = new URLSearchParams(window.location.search).get('type') || 'all';
+        if (query) {
+          window.location.href = '/?type=' + currentType + '&search=' + encodeURIComponent(query);
+        } else {
+          window.location.href = '/?type=' + currentType;
+        }
+      }
+
+      // 回车搜索
+      document.addEventListener('DOMContentLoaded', function() {
+        const searchInput = document.getElementById('searchInput');
+        if (searchInput) {
+          searchInput.addEventListener('keypress', function(e) {
+            if (e.key === 'Enter') {
+              doSearch();
+            }
+          });
+        }
+
+        // 点击邮件项时的处理
+        document.querySelectorAll('.email-item').forEach(item => {
+          item.addEventListener('click', e => {
+            if (selectMode && e.target.type !== 'checkbox') {
+              e.preventDefault();
+              const cb = item.querySelector('.email-checkbox');
+              cb.checked = !cb.checked;
+              updateSelection();
+            }
+          });
+        });
+      });
+
+      // 从编辑菜单触发选择模式
+      function toggleSelectFromMenu() {
+        toggleSelect();
+        toggleEditMenu();
+      }
+
+      // 从编辑菜单触发标记已读
+      function markReadFromMenu() {
+        markRead();
+        toggleEditMenu();
+      }
+
+      // 从编辑菜单触发删除
+      function deleteFromMenu() {
+        doDelete();
+        toggleEditMenu();
+      }
+
+      // 切换选择模式
+      function toggleSelect() {
+        selectMode = !selectMode;
+        const list = document.querySelector('.email-list');
+
+        if (selectMode) {
+          list.classList.add('select-mode');
+        } else {
+          list.classList.remove('select-mode');
+          document.querySelectorAll('.email-checkbox').forEach(cb => cb.checked = false);
+          selectedIds.clear();
+          updateButtons();
+        }
+
+        updateEditMenuButtons();
+      }
+
+      // 更新选择状态
+      function updateSelection() {
+        selectedIds = new Set();
+        document.querySelectorAll('.email-checkbox:checked').forEach(cb => {
+          selectedIds.add({ id: cb.value, type: cb.dataset.type });
+        });
+        updateButtons();
+      }
+
+      // 更新按钮状态
+      function updateButtons() {
+        updateEditMenuButtons();
+      }
+
+      // 更新编辑菜单按钮状态
+      function updateEditMenuButtons() {
+        const count = selectedIds.size;
+        const readBtn = document.getElementById('editReadBtn');
+        const deleteBtn = document.getElementById('editDeleteBtn');
+        const selectBtn = document.getElementById('editSelectBtn');
+
+        if (readBtn) readBtn.disabled = count === 0;
+        if (deleteBtn) deleteBtn.disabled = count === 0;
+
+        if (selectBtn) {
+          if (selectMode) {
+            selectBtn.innerHTML = '<span data-lucide="check-square" class="edit-menu-icon"></span><span>退出选择</span>';
+          } else {
+            selectBtn.innerHTML = '<span data-lucide="square" class="edit-menu-icon"></span><span>选择内容</span>';
+          }
+          if (typeof lucide !== 'undefined') lucide.createIcons();
+        }
+      }
+
+      // 标记已读
+      async function markRead() {
+        if (selectedIds.size === 0) return;
+
+        const items = Array.from(selectedIds);
+        const emailIds = items.filter(i => i.type === 'email').map(i => i.id);
+        const rssIds = items.filter(i => i.type === 'rss').map(i => i.id);
+
+        // 标记邮件已读
+        if (emailIds.length > 0) {
+          await fetch('/api/mark-read', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ ids: emailIds })
+          });
+        }
+
+        // 标记 RSS 文章已读
+        if (rssIds.length > 0) {
+          await fetch('/api/articles/mark-read', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ ids: rssIds })
+          });
+        }
+
+        location.reload();
+      }
+
+      // 删除
+      async function doDelete() {
+        if (selectedIds.size === 0) return;
+        if (!confirm('确定删除 ' + selectedIds.size + ' 项内容？')) return;
+
+        const items = Array.from(selectedIds);
+        const emailIds = items.filter(i => i.type === 'email').map(i => i.id);
+        const rssIds = items.filter(i => i.type === 'rss').map(i => i.id);
+
+        // 删除邮件
+        if (emailIds.length > 0) {
+          await fetch('/api/delete', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ ids: emailIds })
+          });
+        }
+
+        // 删除 RSS 文章
+        if (rssIds.length > 0) {
+          await fetch('/api/articles/delete', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ ids: rssIds })
+          });
+        }
+
+        location.reload();
+      }
     </script>
   `;
+}
+
+// 删除 RSS 文章
+async function handleDeleteArticles(request, env) {
+  const data = await request.json();
+  try {
+    if (data.ids) {
+      const ids = data.ids.map(id => parseInt(id)).filter(id => !isNaN(id));
+      if (ids.length) {
+        const placeholders = ids.map(() => '?').join(',');
+        await env.DB.prepare(`UPDATE rss_articles SET is_deleted = 1 WHERE id IN (${placeholders})`).bind(...ids).run();
+      }
+    }
+    return new Response(JSON.stringify({ success: true }), { headers: { 'Content-Type': 'application/json' } });
+  } catch (error) {
+    return new Response(JSON.stringify({ success: false, error: error.message }), { status: 500 });
+  }
 }
