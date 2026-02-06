@@ -1,5 +1,6 @@
-// src/index.js - 邮件管理系统 - Koobai 风格 + 完整功能
+// src/index.js - 邮件管理系统 - Koobai 风格 + 完整功能 + RSS 订阅
 import PostalMime from 'postal-mime';
+import { parseRssFeed, fetchRssArticles, fetchAllDueFeeds, shouldRunCron } from './rss-utils.js';
 
 // 内存日志缓冲区（用于快速查看）
 let operationLogs = [];
@@ -324,6 +325,17 @@ export default {
       console.error('Request error:', error);
       return new Response(renderErrorPage(error.message), { status: 500 });
     }
+  },
+
+  // 定时任务：抓取 RSS 订阅
+  async scheduled(event, env, ctx) {
+    console.log('Cron triggered at:', new Date().toISOString());
+    try {
+      const result = await fetchAllDueFeeds(env);
+      console.log('RSS fetch result:', result);
+    } catch (error) {
+      console.error('Cron error:', error);
+    }
   }
 };
 
@@ -343,6 +355,23 @@ async function handleRequest(request, env) {
 
   if (path === '/' || path.startsWith('/?')) return handleHomePage(request, env, { category, isRead, search });
   if (path.startsWith('/view/')) return handleEmailView(request, path.split('/')[2], env);
+
+  // RSS 订阅管理
+  if (path === '/feeds') return handleFeedsPage(request, env);
+  if (path === '/api/feeds' && request.method === 'GET') return handleGetFeeds(request, env);
+  if (path === '/api/feeds' && request.method === 'POST') return handleAddFeed(request, env);
+  if (path.match(/^\/api\/feeds\/\d+$/) && request.method === 'PUT') return handleUpdateFeed(request, path.split('/')[3], env);
+  if (path.match(/^\/api\/feeds\/\d+$/) && request.method === 'DELETE') return handleDeleteFeed(request, path.split('/')[3], env);
+  if (path.match(/^\/api\/feeds\/\d+\/fetch$/)) return handleFetchFeed(request, path.split('/')[3], env);
+
+  // RSS 文章
+  if (path === '/api/articles') return handleGetArticles(request, env);
+  if (path.startsWith('/article/')) return handleArticleView(request, path.split('/')[2], env);
+  if (path === '/api/articles/mark-read') return handleMarkArticlesRead(request, env);
+
+  // 合并视图
+  if (path === '/api/unified') return handleUnifiedContent(request, env);
+
   if (path === '/api/emails') return handleApiEmails(request, env);
   if (path === '/api/mark-read') return handleMarkRead(request, env);
   if (path === '/api/delete') return handleDeleteEmail(request, env);
@@ -407,20 +436,60 @@ async function handleReceiveEmail(request, env) {
 
 async function handleHomePage(request, env, filters = {}) {
   const { category, isRead, search } = filters;
-  const emails = await getEmails(search, { category, isRead }, env);
-  
-  // 获取标签列表
-  let tags = [];
-  try {
-    const { results } = await env.DB.prepare('SELECT * FROM tags ORDER BY name').all();
-    tags = results || [];
-  } catch (e) {
-    tags = [];
+  const url = new URL(request.url);
+  const contentType = url.searchParams.get('type') || 'all'; // all, email, rss
+
+  let items = [];
+
+  // 获取邮件
+  if (contentType === 'all' || contentType === 'email') {
+    const emails = await getEmails(search, { category, isRead }, env);
+    items.push(...emails.map(e => ({
+      id: e.id,
+      type: 'email',
+      title: e.subject,
+      content: e.content_text,
+      date: e.date_sent,
+      source: e.sender_name || e.sender,
+      url: `/view/${e.id}`,
+      is_read: e.is_read
+    })));
   }
-  
+
+  // 获取 RSS 文章
+  if (contentType === 'all' || contentType === 'rss') {
+    try {
+      const { results: articles } = await env.DB.prepare(`
+        SELECT a.id, a.title, a.description, a.published_at, a.is_read,
+               f.name as feed_name
+        FROM rss_articles a
+        JOIN rss_feeds f ON a.feed_id = f.id
+        WHERE a.is_deleted = 0
+        ORDER BY a.published_at DESC
+        LIMIT 50
+      `).all();
+
+      items.push(...(articles || []).map(a => ({
+        id: a.id,
+        type: 'rss',
+        title: a.title,
+        content: a.description,
+        date: a.published_at,
+        source: a.feed_name,
+        url: `/article/${a.id}`,
+        is_read: a.is_read
+      })));
+    } catch (e) {
+      console.error('RSS fetch error:', e);
+    }
+  }
+
+  // 按日期排序
+  items.sort((a, b) => new Date(b.date) - new Date(a.date));
+
   const html = renderKoobaiPage({
     page: 'inbox',
-    content: renderEmailList(emails, { category, isRead, search, tags })
+    content: renderUnifiedList(items, { contentType, category, isRead, search })
   });
   return new Response(html, { headers: { 'Content-Type': 'text/html; charset=utf-8' } });
 }
@@ -586,10 +655,12 @@ function renderKoobaiPage({ page, emailId, content }) {
   const isView = page === 'view';
   const isDiagnostics = page === 'diagnostics';
 
+  const isFeeds = page === 'feeds';
+
   const navButtons = [
     { id: 'inbox', icon: 'mail', label: '收件箱', href: '/', active: isInbox },
     { id: 'logs', icon: 'activity', label: '日志', href: '/logs', active: isLogs || isDiagnostics },
-    { id: 'rss', icon: 'rss', label: '订阅', href: '/rss', active: false },
+    { id: 'feeds', icon: 'rss', label: '订阅', href: '/feeds', active: isFeeds },
   ];
 
   const actionButtons = isInbox ? [
@@ -2419,4 +2490,840 @@ async function handleDebug(request, env) {
   return new Response(JSON.stringify(diagnostics, null, 2), {
     headers: { 'Content-Type': 'application/json' }
   });
+}// ============ RSS 订阅功能 ============
+
+// RSS 订阅管理页面
+async function handleFeedsPage(request, env) {
+  const { results: feeds } = await env.DB.prepare(`
+    SELECT * FROM rss_feeds ORDER BY created_at DESC
+  `).all();
+
+  const html = renderKoobaiPage({
+    page: 'feeds',
+    content: renderFeedsManagement(feeds || [])
+  });
+
+  return new Response(html, { headers: { 'Content-Type': 'text/html; charset=utf-8' } });
+}
+
+// 获取订阅源列表
+async function handleGetFeeds(request, env) {
+  const { results } = await env.DB.prepare(`
+    SELECT f.*, COUNT(a.id) as article_count,
+           SUM(CASE WHEN a.is_read = 0 THEN 1 ELSE 0 END) as unread_count
+    FROM rss_feeds f
+    LEFT JOIN rss_articles a ON f.id = a.feed_id AND a.is_deleted = 0
+    GROUP BY f.id
+    ORDER BY f.created_at DESC
+  `).all();
+
+  return new Response(JSON.stringify({ success: true, feeds: results || [] }), {
+    headers: { 'Content-Type': 'application/json' }
+  });
+}
+
+// 添加订阅源
+async function handleAddFeed(request, env) {
+  try {
+    const data = await request.json();
+    const { name, url, category = 'tech', cron_expression = '0 * * * *' } = data;
+
+    if (!name || !url) {
+      return new Response(JSON.stringify({ success: false, error: '名称和URL不能为空' }), {
+        status: 400, headers: { 'Content-Type': 'application/json' }
+      });
+    }
+
+    // 验证 URL
+    try {
+      new URL(url);
+    } catch (e) {
+      return new Response(JSON.stringify({ success: false, error: '无效的 URL' }), {
+        status: 400, headers: { 'Content-Type': 'application/json' }
+      });
+    }
+
+    // 插入订阅源
+    const result = await env.DB.prepare(`
+      INSERT INTO rss_feeds (name, url, category, cron_expression)
+      VALUES (?, ?, ?, ?)
+    `).bind(name, url, category, cron_expression).run();
+
+    const feedId = result.meta.last_row_id;
+
+    // 立即抓取一次
+    const feed = { id: feedId, url, name };
+    const fetchResult = await fetchRssArticles(feed, env);
+
+    return new Response(JSON.stringify({
+      success: true,
+      feed_id: feedId,
+      fetch_result: fetchResult
+    }), {
+      headers: { 'Content-Type': 'application/json' }
+    });
+  } catch (error) {
+    return new Response(JSON.stringify({ success: false, error: error.message }), {
+      status: 500, headers: { 'Content-Type': 'application/json' }
+    });
+  }
+}
+
+// 更新订阅源
+async function handleUpdateFeed(request, feedId, env) {
+  try {
+    const data = await request.json();
+    const { name, url, category, cron_expression, is_active } = data;
+
+    let setClauses = [];
+    let params = [];
+
+    if (name !== undefined) { setClauses.push('name = ?'); params.push(name); }
+    if (url !== undefined) { setClauses.push('url = ?'); params.push(url); }
+    if (category !== undefined) { setClauses.push('category = ?'); params.push(category); }
+    if (cron_expression !== undefined) { setClauses.push('cron_expression = ?'); params.push(cron_expression); }
+    if (is_active !== undefined) { setClauses.push('is_active = ?'); params.push(is_active ? 1 : 0); }
+
+    setClauses.push('updated_at = datetime("now")');
+    params.push(feedId);
+
+    await env.DB.prepare(`
+      UPDATE rss_feeds SET ${setClauses.join(', ')} WHERE id = ?
+    `).bind(...params).run();
+
+    return new Response(JSON.stringify({ success: true }), {
+      headers: { 'Content-Type': 'application/json' }
+    });
+  } catch (error) {
+    return new Response(JSON.stringify({ success: false, error: error.message }), {
+      status: 500, headers: { 'Content-Type': 'application/json' }
+    });
+  }
+}
+
+// 删除订阅源
+async function handleDeleteFeed(request, feedId, env) {
+  try {
+    // 删除文章
+    await env.DB.prepare('DELETE FROM rss_articles WHERE feed_id = ?').bind(feedId).run();
+    // 删除订阅源
+    await env.DB.prepare('DELETE FROM rss_feeds WHERE id = ?').bind(feedId).run();
+
+    return new Response(JSON.stringify({ success: true }), {
+      headers: { 'Content-Type': 'application/json' }
+    });
+  } catch (error) {
+    return new Response(JSON.stringify({ success: false, error: error.message }), {
+      status: 500, headers: { 'Content-Type': 'application/json' }
+    });
+  }
+}
+
+// 手动抓取订阅源
+async function handleFetchFeed(request, feedId, env) {
+  try {
+    const feed = await env.DB.prepare('SELECT * FROM rss_feeds WHERE id = ?').bind(feedId).first();
+    if (!feed) {
+      return new Response(JSON.stringify({ success: false, error: '订阅源不存在' }), {
+        status: 404, headers: { 'Content-Type': 'application/json' }
+      });
+    }
+
+    const result = await fetchRssArticles(feed, env);
+    return new Response(JSON.stringify({ success: true, ...result }), {
+      headers: { 'Content-Type': 'application/json' }
+    });
+  } catch (error) {
+    return new Response(JSON.stringify({ success: false, error: error.message }), {
+      status: 500, headers: { 'Content-Type': 'application/json' }
+    });
+  }
+}
+
+// 获取RSS文章列表
+async function handleGetArticles(request, env) {
+  const url = new URL(request.url);
+  const feedId = url.searchParams.get('feed_id');
+  const limit = parseInt(url.searchParams.get('limit') || '50');
+
+  let query = `
+    SELECT a.*, f.name as feed_name, f.category
+    FROM rss_articles a
+    JOIN rss_feeds f ON a.feed_id = f.id
+    WHERE a.is_deleted = 0
+  `;
+  const params = [];
+
+  if (feedId) {
+    query += ' AND a.feed_id = ?';
+    params.push(feedId);
+  }
+
+  query += ' ORDER BY a.published_at DESC LIMIT ?';
+  params.push(limit);
+
+  const { results } = await env.DB.prepare(query).bind(...params).all();
+
+  return new Response(JSON.stringify({ success: true, articles: results || [] }), {
+    headers: { 'Content-Type': 'application/json' }
+  });
+}
+
+// 查看RSS文章详情
+async function handleArticleView(request, articleId, env) {
+  const article = await env.DB.prepare(`
+    SELECT a.*, f.name as feed_name, f.url as feed_url
+    FROM rss_articles a
+    JOIN rss_feeds f ON a.feed_id = f.id
+    WHERE a.id = ? AND a.is_deleted = 0
+  `).bind(articleId).first();
+
+  if (!article) {
+    return new Response(renderKoobaiPage({
+      page: 'view',
+      content: '<div class="empty">文章不存在</div>'
+    }), { status: 404 });
+  }
+
+  // 标记为已读
+  await env.DB.prepare('UPDATE rss_articles SET is_read = 1 WHERE id = ?').bind(articleId).run();
+
+  const html = renderKoobaiPage({
+    page: 'view',
+    emailId: articleId,
+    content: renderArticleDetail(article)
+  });
+
+  return new Response(html, { headers: { 'Content-Type': 'text/html; charset=utf-8' } });
+}
+
+// 标记文章已读
+async function handleMarkArticlesRead(request, env) {
+  const data = await request.json();
+  try {
+    if (data.ids) {
+      const ids = data.ids.map(id => parseInt(id)).filter(id => !isNaN(id));
+      if (ids.length) {
+        const placeholders = ids.map(() => '?').join(',');
+        await env.DB.prepare(`UPDATE rss_articles SET is_read = 1 WHERE id IN (${placeholders})`).bind(...ids).run();
+      }
+    }
+    return new Response(JSON.stringify({ success: true }), { headers: { 'Content-Type': 'application/json' } });
+  } catch (error) {
+    return new Response(JSON.stringify({ success: false, error: error.message }), { status: 500 });
+  }
+}
+
+// 合并内容（邮件 + RSS）
+async function handleUnifiedContent(request, env) {
+  const url = new URL(request.url);
+  const type = url.searchParams.get('type') || 'all';
+  const search = url.searchParams.get('search') || '';
+
+  let items = [];
+
+  // 获取邮件
+  if (type === 'all' || type === 'email') {
+    const { results: emails } = await env.DB.prepare(`
+      SELECT id, subject as title, sender, content_text, date_sent as date, 'email' as type
+      FROM emails WHERE is_deleted = 0
+      ORDER BY date_sent DESC LIMIT 50
+    `).all();
+    items.push(...(emails || []).map(e => ({
+      ...e,
+      source: e.sender,
+      url: `/view/${e.id}`
+    })));
+  }
+
+  // 获取 RSS 文章
+  if (type === 'all' || type === 'rss') {
+    const { results: articles } = await env.DB.prepare(`
+      SELECT a.id, a.title, a.link, a.description as content_text,
+             a.published_at as date, 'rss' as type, f.name as feed_name
+      FROM rss_articles a
+      JOIN rss_feeds f ON a.feed_id = f.id
+      WHERE a.is_deleted = 0
+      ORDER BY a.published_at DESC LIMIT 50
+    `).all();
+    items.push(...(articles || []).map(a => ({
+      ...a,
+      source: a.feed_name,
+      url: `/article/${a.id}`
+    })));
+  }
+
+  // 搜索过滤
+  if (search) {
+    items = items.filter(item =>
+      item.title?.toLowerCase().includes(search.toLowerCase()) ||
+      item.content_text?.toLowerCase().includes(search.toLowerCase())
+    );
+  }
+
+  // 按日期排序
+  items.sort((a, b) => new Date(b.date) - new Date(a.date));
+
+  return new Response(JSON.stringify({ success: true, items: items.slice(0, 100) }), {
+    headers: { 'Content-Type': 'application/json' }
+  });
+}
+// ============ RSS UI 渲染函数 ============
+
+// 渲染订阅管理页面
+function renderFeedsManagement(feeds) {
+  const feedCards = feeds.map(feed => `
+    <div class="feed-card" data-feed-id="${feed.id}">
+      <div class="feed-header">
+        <div class="feed-info">
+          <span class="feed-icon">🌐</span>
+          <div class="feed-details">
+            <div class="feed-name">${escapeHtml(feed.name)}</div>
+            <div class="feed-url">${escapeHtml(feed.url)}</div>
+          </div>
+        </div>
+        <div class="feed-actions">
+          <button class="btn-icon" onclick="editFeed(${feed.id})" title="编辑">
+            <span data-lucide="edit-2"></span>
+          </button>
+          <button class="btn-icon" onclick="fetchFeed(${feed.id})" title="立即抓取">
+            <span data-lucide="refresh-cw"></span>
+          </button>
+          <button class="btn-icon" onclick="deleteFeed(${feed.id})" title="删除">
+            <span data-lucide="trash-2"></span>
+          </button>
+        </div>
+      </div>
+      <div class="feed-meta">
+        <div class="feed-stat">
+          <span data-lucide="clock"></span>
+          <span>${feed.last_fetch_at ? formatTime(feed.last_fetch_at) : '未抓取'}</span>
+        </div>
+        <div class="feed-stat">
+          <span data-lucide="calendar"></span>
+          <span>${feed.cron_expression || '0 * * * *'}</span>
+        </div>
+        <div class="feed-stat ${feed.is_active ? 'status-active' : 'status-inactive'}">
+          <span data-lucide="${feed.is_active ? 'check-circle' : 'x-circle'}"></span>
+          <span>${feed.is_active ? '启用' : '禁用'}</span>
+        </div>
+      </div>
+      ${feed.last_error ? `
+        <div class="feed-error">
+          <span data-lucide="alert-circle"></span>
+          <span>${escapeHtml(feed.last_error)}</span>
+        </div>
+      ` : ''}
+    </div>
+  `).join('');
+
+  return `
+    <h1 class="page-title">RSS 订阅管理</h1>
+    <p class="page-subtitle">管理您的 RSS 订阅源</p>
+
+    <button class="btn-primary" onclick="showAddFeedModal()">
+      <span data-lucide="plus"></span>
+      <span>添加订阅源</span>
+    </button>
+
+    <div class="feeds-container">
+      <div class="feeds-header">
+        <h2>我的订阅 (${feeds.length})</h2>
+      </div>
+      ${feeds.length > 0 ? `
+        <div class="feeds-list">
+          ${feedCards}
+        </div>
+      ` : `
+        <div class="empty" style="margin-top: 40px;">
+          <div class="empty-icon">📡</div>
+          <div class="empty-text">暂无订阅源</div>
+        </div>
+      `}
+    </div>
+
+    <!-- 添加订阅弹窗 -->
+    <div class="modal-overlay" id="addFeedModal">
+      <div class="modal">
+        <div class="modal-title">✨ 添加 RSS 订阅</div>
+        <div class="modal-body">
+          <label class="form-label">订阅源名称</label>
+          <input type="text" class="modal-input" id="feedName" placeholder="例如：阮一峰的网络日志">
+
+          <label class="form-label">RSS 地址</label>
+          <input type="url" class="modal-input" id="feedUrl" placeholder="https://example.com/feed">
+
+          <label class="form-label">分类</label>
+          <div class="category-buttons">
+            <button class="category-btn active" data-category="tech">技术</button>
+            <button class="category-btn" data-category="news">新闻</button>
+            <button class="category-btn" data-category="blog">博客</button>
+            <button class="category-btn" data-category="other">其他</button>
+          </div>
+
+          <label class="form-label">
+            抓取频率 (Cron 表达式)
+            <span class="form-help" title="格式: 分 时 日 月 周&#10;例如: 0 * * * * (每小时)&#10;0 */6 * * * (每6小时)">ⓘ</span>
+          </label>
+          <input type="text" class="modal-input" id="feedCron" value="0 * * * *" placeholder="0 * * * *">
+          <div class="cron-presets">
+            <button class="preset-btn" onclick="setCron('0 * * * *')">每小时</button>
+            <button class="preset-btn" onclick="setCron('0 */6 * * *')">每6小时</button>
+            <button class="preset-btn" onclick="setCron('0 0 * * *')">每天</button>
+          </div>
+        </div>
+        <div class="modal-buttons">
+          <button class="modal-btn modal-btn-cancel" onclick="closeAddFeedModal()">取消</button>
+          <button class="modal-btn modal-btn-confirm" onclick="confirmAddFeed()">添加订阅</button>
+        </div>
+      </div>
+    </div>
+
+    <style>
+      .btn-primary {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        padding: 12px 24px;
+        background: var(--accent);
+        color: white;
+        border: none;
+        border-radius: var(--radius);
+        font-size: 15px;
+        cursor: pointer;
+        transition: all 0.2s;
+        margin-bottom: 24px;
+      }
+      .btn-primary:hover { opacity: 0.9; }
+
+      .feeds-container { margin-top: 24px; }
+      .feeds-header { margin-bottom: 16px; }
+      .feeds-header h2 { font-size: 18px; font-weight: 500; }
+
+      .feeds-list { display: flex; flex-direction: column; gap: 16px; }
+
+      .feed-card {
+        background: var(--bg-card);
+        border-radius: var(--radius);
+        padding: 20px;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.04);
+        transition: all 0.2s;
+      }
+      .feed-card:hover { box-shadow: 0 4px 12px rgba(0,0,0,0.08); }
+
+      .feed-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: flex-start;
+        margin-bottom: 12px;
+      }
+
+      .feed-info {
+        display: flex;
+        gap: 12px;
+        flex: 1;
+      }
+
+      .feed-icon {
+        font-size: 24px;
+        flex-shrink: 0;
+      }
+
+      .feed-details { flex: 1; min-width: 0; }
+
+      .feed-name {
+        font-size: 16px;
+        font-weight: 500;
+        color: var(--text);
+        margin-bottom: 4px;
+      }
+
+      .feed-url {
+        font-size: 13px;
+        color: var(--text-muted);
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .feed-actions {
+        display: flex;
+        gap: 8px;
+      }
+
+      .btn-icon {
+        width: 32px;
+        height: 32px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        border: none;
+        background: transparent;
+        color: var(--text-secondary);
+        border-radius: 8px;
+        cursor: pointer;
+        transition: all 0.2s;
+      }
+      .btn-icon:hover { background: var(--hover-bg); color: var(--text); }
+      .btn-icon svg { width: 18px; height: 18px; }
+
+      .feed-meta {
+        display: flex;
+        gap: 16px;
+        flex-wrap: wrap;
+      }
+
+      .feed-stat {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        font-size: 13px;
+        color: var(--text-secondary);
+      }
+      .feed-stat svg { width: 14px; height: 14px; }
+      .feed-stat.status-active { color: #22c55e; }
+      .feed-stat.status-inactive { color: #ef4444; }
+
+      .feed-error {
+        margin-top: 12px;
+        padding: 10px 12px;
+        background: #fee2e2;
+        color: #991b1b;
+        border-radius: 8px;
+        font-size: 13px;
+        display: flex;
+        gap: 8px;
+        align-items: flex-start;
+      }
+      .feed-error svg { width: 16px; height: 16px; flex-shrink: 0; margin-top: 2px; }
+
+      .form-label {
+        display: block;
+        font-size: 14px;
+        font-weight: 500;
+        color: var(--text);
+        margin: 16px 0 8px;
+      }
+      .form-label:first-child { margin-top: 0; }
+
+      .form-help {
+        display: inline-block;
+        width: 16px;
+        height: 16px;
+        background: var(--text-muted);
+        color: white;
+        border-radius: 50%;
+        text-align: center;
+        line-height: 16px;
+        font-size: 12px;
+        cursor: help;
+        margin-left: 4px;
+      }
+
+      .category-buttons {
+        display: flex;
+        gap: 8px;
+        margin-bottom: 8px;
+      }
+
+      .category-btn {
+        flex: 1;
+        padding: 8px 16px;
+        background: var(--hover-bg);
+        color: var(--text-secondary);
+        border: none;
+        border-radius: 20px;
+        font-size: 13px;
+        cursor: pointer;
+        transition: all 0.2s;
+      }
+      .category-btn:hover { background: var(--active-bg); }
+      .category-btn.active {
+        background: rgba(153, 77, 97, 0.1);
+        color: var(--accent);
+      }
+
+      .cron-presets {
+        display: flex;
+        gap: 8px;
+        margin-top: 8px;
+      }
+
+      .preset-btn {
+        padding: 6px 12px;
+        background: var(--hover-bg);
+        color: var(--text-secondary);
+        border: none;
+        border-radius: 12px;
+        font-size: 12px;
+        cursor: pointer;
+        transition: all 0.2s;
+      }
+      .preset-btn:hover { background: var(--active-bg); color: var(--text); }
+    </style>
+
+    <script>
+      let selectedCategory = 'tech';
+
+      function showAddFeedModal() {
+        document.getElementById('addFeedModal').classList.add('show');
+      }
+
+      function closeAddFeedModal() {
+        document.getElementById('addFeedModal').classList.remove('show');
+      }
+
+      document.querySelectorAll('.category-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+          document.querySelectorAll('.category-btn').forEach(b => b.classList.remove('active'));
+          btn.classList.add('active');
+          selectedCategory = btn.dataset.category;
+        });
+      });
+
+      function setCron(cron) {
+        document.getElementById('feedCron').value = cron;
+      }
+
+      async function confirmAddFeed() {
+        const name = document.getElementById('feedName').value.trim();
+        const url = document.getElementById('feedUrl').value.trim();
+        const cron = document.getElementById('feedCron').value.trim();
+
+        if (!name || !url) {
+          alert('请填写订阅源名称和地址');
+          return;
+        }
+
+        try {
+          const response = await fetch('/api/feeds', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              name,
+              url,
+              category: selectedCategory,
+              cron_expression: cron
+            })
+          });
+
+          const result = await response.json();
+          if (result.success) {
+            alert(\`订阅添加成功！抓取了 \${result.fetch_result?.newCount || 0} 篇文章\`);
+            location.reload();
+          } else {
+            alert('添加失败：' + result.error);
+          }
+        } catch (error) {
+          alert('添加失败：' + error.message);
+        }
+      }
+
+      async function deleteFeed(id) {
+        if (!confirm('确定删除这个订阅源吗？')) return;
+
+        try {
+          const response = await fetch(\`/api/feeds/\${id}\`, { method: 'DELETE' });
+          const result = await response.json();
+          if (result.success) {
+            location.reload();
+          } else {
+            alert('删除失败：' + result.error);
+          }
+        } catch (error) {
+          alert('删除失败：' + error.message);
+        }
+      }
+
+      async function fetchFeed(id) {
+        try {
+          const response = await fetch(\`/api/feeds/\${id}/fetch\`, { method: 'POST' });
+          const result = await response.json();
+          if (result.success) {
+            alert(\`抓取成功！新增 \${result.newCount} 篇文章\`);
+            location.reload();
+          } else {
+            alert('抓取失败：' + result.error);
+          }
+        } catch (error) {
+          alert('抓取失败：' + error.message);
+        }
+      }
+
+      function editFeed(id) {
+        alert('编辑功能开发中...');
+      }
+
+      if (typeof lucide !== 'undefined') {
+        lucide.createIcons();
+      }
+    </script>
+  `;
+}
+
+// 渲染 RSS 文章详情
+function renderArticleDetail(article) {
+  const content = article.content_html || `<pre style="white-space:pre-wrap;font-family:inherit">${escapeHtml(article.content_text || article.description || '')}</pre>`;
+
+  return `
+    <div class="email-detail">
+      <div class="email-detail-header">
+        <div class="article-source">
+          <span data-lucide="rss"></span>
+          <span>${escapeHtml(article.feed_name)}</span>
+        </div>
+        <div class="email-detail-subject">${escapeHtml(article.title)}</div>
+        <div class="email-detail-meta">
+          ${article.author ? `<span>${escapeHtml(article.author)}</span><span>·</span>` : ''}
+          <span>${formatFullTime(article.published_at)}</span>
+          <span>·</span>
+          <a href="${article.link}" target="_blank" rel="noopener">查看原文 ↗</a>
+        </div>
+      </div>
+      <div class="email-detail-body">${content}</div>
+    </div>
+
+    <style>
+      .article-source {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        font-size: 13px;
+        color: #3b82f6;
+        margin-bottom: 12px;
+      }
+      .article-source svg { width: 16px; height: 16px; }
+    </style>
+
+    <script>
+      if (typeof lucide !== 'undefined') {
+        lucide.createIcons();
+      }
+    </script>
+  `;
+}
+
+// ============ 合并视图渲染 ============
+
+function renderUnifiedList(items, filters = {}) {
+  const { contentType = 'all', category, isRead, search } = filters;
+
+  const listItems = items.map(item => {
+    const preview = (item.content || '').substring(0, 80).replace(/\s+/g, ' ');
+    const isUnread = !item.is_read;
+    const typeIcon = item.type === 'email' ? '📧' : '📰';
+    const typeBadge = item.type === 'email' ? 'email' : 'rss';
+
+    return `
+      <div class="email-item ${isUnread ? 'unread' : ''}" data-id="${item.id}" data-type="${item.type}">
+        <input type="checkbox" class="email-checkbox" value="${item.id}" onclick="event.stopPropagation(); updateSelection();">
+        <div class="email-content-wrapper" onclick="if(!selectMode) location.href='${item.url}'">
+          <div class="email-header-row">
+            <div class="email-date">${formatKoobaiDate(item.date)}</div>
+            <span class="content-type-badge content-type-${typeBadge}">${typeIcon}</span>
+          </div>
+          <div class="email-body">
+            <div class="email-subject">${escapeHtml(item.title || '(无标题)')}</div>
+            <div class="email-preview">${escapeHtml(preview)}</div>
+          </div>
+          <div class="email-footer">
+            <span class="email-sender-tag">${escapeHtml(item.source)}</span>
+            ${item.type === 'rss' ? '<span class="rss-indicator">🌐</span>' : ''}
+          </div>
+        </div>
+      </div>
+    `;
+  }).join('');
+
+  // 类型筛选按钮
+  const typeFilters = `
+    <div class="type-filter-bar">
+      <a href="/?type=all" class="filter-type-btn ${contentType === 'all' ? 'active' : ''}">
+        <span data-lucide="layers"></span>
+        <span>全部</span>
+      </a>
+      <a href="/?type=email" class="filter-type-btn ${contentType === 'email' ? 'active' : ''}">
+        <span data-lucide="mail"></span>
+        <span>邮件</span>
+      </a>
+      <a href="/?type=rss" class="filter-type-btn ${contentType === 'rss' ? 'active' : ''}">
+        <span data-lucide="rss"></span>
+        <span>RSS</span>
+      </a>
+    </div>
+  `;
+
+  return `
+    ${typeFilters}
+    
+    ${items.length > 0 ? `
+      <div class="email-list">
+        ${listItems}
+      </div>
+    ` : `
+      <div class="empty" style="margin-top: 40px;">
+        <div class="empty-icon">📭</div>
+        <div class="empty-text">暂无内容</div>
+      </div>
+    `}
+
+    <style>
+      .type-filter-bar {
+        display: flex;
+        gap: 12px;
+        margin-bottom: 24px;
+        padding: 12px;
+        background: var(--bg-card);
+        border-radius: var(--radius);
+        box-shadow: 0 1px 3px rgba(0,0,0,0.04);
+      }
+
+      .filter-type-btn {
+        flex: 1;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 8px;
+        padding: 10px 16px;
+        background: transparent;
+        color: var(--text-secondary);
+        border: none;
+        border-radius: 12px;
+        font-size: 14px;
+        text-decoration: none;
+        cursor: pointer;
+        transition: all 0.2s;
+      }
+      .filter-type-btn svg { width: 18px; height: 18px; }
+      .filter-type-btn:hover { background: var(--hover-bg); color: var(--text); }
+      .filter-type-btn.active {
+        background: rgba(153, 77, 97, 0.1);
+        color: var(--accent);
+      }
+
+      .content-type-badge {
+        position: absolute;
+        top: 15px;
+        right: 15px;
+        font-size: 18px;
+      }
+
+      .rss-indicator {
+        font-size: 12px;
+        margin-left: 4px;
+      }
+
+      @media (max-width: 600px) {
+        .type-filter-bar { gap: 8px; padding: 8px; }
+        .filter-type-btn { padding: 8px 12px; font-size: 13px; }
+        .filter-type-btn span:last-child { display: none; }
+      }
+    </style>
+
+    <script>
+      if (typeof lucide !== 'undefined') {
+        lucide.createIcons();
+      }
+    </script>
+  `;
 }
