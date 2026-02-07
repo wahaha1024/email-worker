@@ -690,7 +690,8 @@ function renderKoobaiPage({ page, emailId, content }) {
   --text-secondary: #666666;
   --text-muted: #999999;
   --border: rgba(0,0,0,0.08);
-  --accent: #994d61;
+  --accent: #b4a7d6;  /* 浅薰衣草色 */
+  --accent-light: rgba(180, 167, 214, 0.1);
   --hover-bg: rgba(0,0,0,0.06);
   --active-bg: rgba(0,0,0,0.1);
   --nav-bg: rgba(242, 240, 235, 0.5);
@@ -708,12 +709,31 @@ body {
   font-size: 16px;
   line-height: 1.6;
   padding-bottom: 120px;
+  padding-left: 80px;  /* 左侧筛选栏空间 */
+  padding-right: 80px; /* 右侧功能栏空间 */
 }
 
-.main { 
-  max-width: 760px; 
-  margin: 0 auto; 
+.main {
+  max-width: 720px;  /* 优化阅读宽度 */
+  margin: 0 auto;
   padding: 24px;
+}
+
+@media (max-width: 1200px) {
+  body {
+    padding-left: 24px;
+    padding-right: 24px;
+  }
+}
+
+@media (max-width: 768px) {
+  body {
+    padding-left: 16px;
+    padding-right: 16px;
+  }
+  .main {
+    padding: 16px;
+  }
 }
 
 .page-title {
@@ -914,7 +934,7 @@ body {
 .email-detail-body img { max-width: 100%; border-radius: var(--radius-sm); margin: 16px 0; }
 .email-detail-body p { margin-bottom: 16px; }
 
-/* 底部导航栏 */
+/* 底部导航栏 - Koobai 风格 */
 .bottom-nav {
   position: fixed;
   bottom: 30px;
@@ -922,11 +942,11 @@ body {
   transform: translateX(-50%);
   width: 600px;
   max-width: 90vw;
-  background: rgba(242, 240, 235, 0.5);
+  background: rgba(242, 240, 235, 0.7);
   backdrop-filter: blur(20px) saturate(1.8);
   -webkit-backdrop-filter: blur(20px) saturate(1.8);
   border-radius: 50px;
-  padding: 20px 30px;
+  padding: 16px 24px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -935,30 +955,133 @@ body {
   z-index: 1000;
 }
 
-.nav-menu { display: flex; align-items: center; gap: 32px; }
+.nav-menu { display: flex; align-items: center; gap: 24px; }
 
 .nav-divider { width: 1px; height: 20px; background: rgba(0, 0, 0, 0.1); }
 
 .nav-btn {
   display: flex;
+  flex-direction: column;
   align-items: center;
+  justify-content: center;
   gap: 6px;
-  padding: 0;
-  font-size: 12.8px;
-  color: #444444;
+  padding: 8px 12px;
+  font-size: 11px;
+  color: #666666;
   background: transparent;
   border: none;
   cursor: pointer;
   transition: all 0.2s ease;
   text-decoration: none;
+  min-width: 56px;
+  border-radius: 12px;
 }
 
-.nav-btn:hover { color: #994d61; }
-.nav-btn.active { color: #994d61; }
+.nav-btn:hover {
+  color: var(--accent);
+  background: rgba(180, 167, 214, 0.08);
+}
+
+.nav-btn.active {
+  color: var(--accent);
+  background: var(--accent-light);
+}
+
 .nav-btn:disabled { opacity: 0.35; cursor: not-allowed; }
 
-.nav-btn .icon { width: 20px; height: 20px; display: flex; align-items: center; justify-content: center; }
-.nav-btn .icon svg { width: 20px; height: 20px; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.nav-btn .icon {
+  width: 20px;
+  height: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.nav-btn .icon svg {
+  width: 20px;
+  height: 20px;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/* 左侧筛选栏 */
+.left-sidebar {
+  position: fixed;
+  left: 20px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  z-index: 999;
+}
+
+.sidebar-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  width: 64px;
+  padding: 12px 8px;
+  background: rgba(242, 240, 235, 0.7);
+  backdrop-filter: blur(20px) saturate(1.8);
+  -webkit-backdrop-filter: blur(20px) saturate(1.8);
+  border-radius: 20px;
+  border: none;
+  color: #666666;
+  font-size: 11px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  text-decoration: none;
+  box-shadow: rgba(0, 0, 0, 0.08) 0px 2px 8px;
+}
+
+.sidebar-btn:hover {
+  color: var(--accent);
+  background: rgba(242, 240, 235, 0.85);
+  transform: translateX(4px);
+}
+
+.sidebar-btn.active {
+  color: var(--accent);
+  background: rgba(180, 167, 214, 0.15);
+  box-shadow: rgba(180, 167, 214, 0.3) 0px 4px 12px;
+}
+
+.sidebar-btn .icon {
+  width: 20px;
+  height: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.sidebar-btn .icon svg {
+  width: 20px;
+  height: 20px;
+  stroke-width: 2;
+}
+
+/* 右侧功能栏 */
+.right-sidebar {
+  position: fixed;
+  right: 20px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  z-index: 999;
+}
+
+@media (max-width: 1200px) {
+  .left-sidebar,
+  .right-sidebar {
+    display: none;
+  }
+}
 
 /* 日志页面 */
 .logs-list { display: flex; flex-direction: column; gap: 12px; }
@@ -1124,6 +1247,42 @@ body {
 </head>
 <body>
 
+<!-- 左侧类型筛选栏 -->
+${isInbox ? `
+<div class="left-sidebar">
+  <a href="/?type=all" class="sidebar-btn ${!page || page === 'inbox' ? 'active' : ''}">
+    <span class="icon" data-lucide="layers"></span>
+    <span>全部</span>
+  </a>
+  <a href="/?type=email" class="sidebar-btn">
+    <span class="icon" data-lucide="mail"></span>
+    <span>邮件</span>
+  </a>
+  <a href="/?type=rss" class="sidebar-btn">
+    <span class="icon" data-lucide="rss"></span>
+    <span>RSS</span>
+  </a>
+</div>
+` : ''}
+
+<!-- 右侧功能栏 -->
+${isInbox ? `
+<div class="right-sidebar">
+  <button class="sidebar-btn" id="filterBtn" onclick="toggleFilterMenu()">
+    <span class="icon" data-lucide="filter"></span>
+    <span>筛选</span>
+  </button>
+  <button class="sidebar-btn" id="searchBtn" onclick="toggleSearchBox()">
+    <span class="icon" data-lucide="search"></span>
+    <span>搜索</span>
+  </button>
+  <button class="sidebar-btn" id="editBtn" onclick="toggleEditMenu()">
+    <span class="icon" data-lucide="edit-3"></span>
+    <span>编辑</span>
+  </button>
+</div>
+` : ''}
+
 <main class="main">
   ${content}
 </main>
@@ -1137,16 +1296,6 @@ body {
         <span class="icon" data-lucide="${btn.icon}"></span>
         <span>${btn.label}</span>
       </a>
-    `).join('')}
-
-    ${actionButtons.length > 0 ? '<div class="nav-divider"></div>' : ''}
-
-    ${actionButtons.map(btn => `
-      <button class="nav-btn" id="${btn.id}Btn" onclick="${btn.onclick}"
-              ${btn.disabled ? 'disabled' : ''}>
-        <span class="icon" data-lucide="${btn.icon}"></span>
-        <span>${btn.label}</span>
-      </button>
     `).join('')}
   </div>
 </div>
@@ -1561,7 +1710,7 @@ function renderEmailList(emails, filters = {}) {
         background: var(--hover-bg);
       }
       .filter-menu-item.active {
-        background: rgba(153, 77, 97, 0.1);
+        background: var(--accent-light);
         color: var(--accent);
       }
       .filter-menu-icon {
@@ -1610,7 +1759,7 @@ function renderEmailList(emails, filters = {}) {
         cursor: not-allowed;
       }
       .edit-menu-item.active {
-        background: rgba(153, 77, 97, 0.1);
+        background: var(--accent-light);
         color: var(--accent);
       }
       .edit-menu-icon {
@@ -2153,7 +2302,7 @@ function renderDiagnosticsContent(data) {
         color: var(--text-secondary);
       }
       .diag-table-tag.active {
-        background: rgba(153, 77, 97, 0.1);
+        background: var(--accent-light);
         color: var(--accent);
       }
       .diag-badge {
@@ -3040,7 +3189,7 @@ function renderFeedsManagement(feeds) {
       }
       .category-btn:hover { background: var(--active-bg); }
       .category-btn.active {
-        background: rgba(153, 77, 97, 0.1);
+        background: var(--accent-light);
         color: var(--accent);
       }
 
@@ -3254,6 +3403,24 @@ function renderUnifiedList(items, filters = {}) {
     </div>
   `;
 
+  // 右侧功能按钮
+  const actionButtons = `
+    <div class="action-buttons-bar">
+      <button class="action-btn" id="filterBtn" onclick="toggleFilterMenu()">
+        <span data-lucide="filter"></span>
+        <span>筛选</span>
+      </button>
+      <button class="action-btn" id="searchBtn" onclick="toggleSearchBox()">
+        <span data-lucide="search"></span>
+        <span>搜索</span>
+      </button>
+      <button class="action-btn" id="editBtn" onclick="toggleEditMenu()">
+        <span data-lucide="edit-3"></span>
+        <span>编辑</span>
+      </button>
+    </div>
+  `;
+
   // 筛选菜单（邮件专用）
   const categories = [
     { id: '', label: '全部', icon: 'inbox' },
@@ -3313,6 +3480,7 @@ function renderUnifiedList(items, filters = {}) {
     ${searchBoxHtml}
     ${editMenuHtml}
     ${typeFilters}
+    ${actionButtons}
 
     ${items.length > 0 ? `
       <div class="email-list">
@@ -3327,35 +3495,44 @@ function renderUnifiedList(items, filters = {}) {
 
     <style>
       .type-filter-bar {
+        position: fixed;
+        left: 24px;
+        top: 50%;
+        transform: translateY(-50%);
         display: flex;
+        flex-direction: column;
         gap: 12px;
-        margin-bottom: 24px;
         padding: 12px;
-        background: var(--bg-card);
-        border-radius: var(--radius);
-        box-shadow: 0 1px 3px rgba(0,0,0,0.04);
+        background: rgba(242, 240, 235, 0.5);
+        backdrop-filter: blur(20px) saturate(1.8);
+        -webkit-backdrop-filter: blur(20px) saturate(1.8);
+        border-radius: 50px;
+        box-shadow: rgba(0, 0, 0, 0.1) 0px 0px 1px 0px, rgba(0, 0, 0, 0.12) 0px 10px 30px 0px;
+        z-index: 999;
       }
 
       .filter-type-btn {
-        flex: 1;
         display: flex;
+        flex-direction: column;
         align-items: center;
         justify-content: center;
-        gap: 8px;
-        padding: 10px 16px;
+        gap: 6px;
+        padding: 12px;
         background: transparent;
         color: var(--text-secondary);
         border: none;
-        border-radius: 12px;
-        font-size: 14px;
+        border-radius: 50%;
+        font-size: 11px;
         text-decoration: none;
         cursor: pointer;
         transition: all 0.2s;
+        min-width: 60px;
+        min-height: 60px;
       }
-      .filter-type-btn svg { width: 18px; height: 18px; }
+      .filter-type-btn svg { width: 20px; height: 20px; }
       .filter-type-btn:hover { background: var(--hover-bg); color: var(--text); }
       .filter-type-btn.active {
-        background: rgba(153, 77, 97, 0.1);
+        background: var(--accent-light);
         color: var(--accent);
       }
 
@@ -3369,6 +3546,48 @@ function renderUnifiedList(items, filters = {}) {
       .rss-indicator {
         font-size: 12px;
         margin-left: 4px;
+      }
+
+      /* 右侧功能按钮栏 */
+      .action-buttons-bar {
+        position: fixed;
+        right: 24px;
+        top: 50%;
+        transform: translateY(-50%);
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+        padding: 12px;
+        background: rgba(242, 240, 235, 0.5);
+        backdrop-filter: blur(20px) saturate(1.8);
+        -webkit-backdrop-filter: blur(20px) saturate(1.8);
+        border-radius: 50px;
+        box-shadow: rgba(0, 0, 0, 0.1) 0px 0px 1px 0px, rgba(0, 0, 0, 0.12) 0px 10px 30px 0px;
+        z-index: 999;
+      }
+
+      .action-btn {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 6px;
+        padding: 12px;
+        background: transparent;
+        color: var(--text-secondary);
+        border: none;
+        border-radius: 50%;
+        font-size: 11px;
+        cursor: pointer;
+        transition: all 0.2s;
+        min-width: 60px;
+        min-height: 60px;
+      }
+      .action-btn svg { width: 20px; height: 20px; }
+      .action-btn:hover { background: var(--hover-bg); color: var(--text); }
+      .action-btn.active {
+        background: var(--accent-light);
+        color: var(--accent);
       }
 
       /* 筛选菜单 */
@@ -3404,7 +3623,7 @@ function renderUnifiedList(items, filters = {}) {
         background: var(--hover-bg);
       }
       .filter-menu-item.active {
-        background: rgba(153, 77, 97, 0.1);
+        background: var(--accent-light);
         color: var(--accent);
       }
       .filter-menu-icon {
@@ -3453,7 +3672,7 @@ function renderUnifiedList(items, filters = {}) {
         cursor: not-allowed;
       }
       .edit-menu-item.active {
-        background: rgba(153, 77, 97, 0.1);
+        background: var(--accent-light);
         color: var(--accent);
       }
       .edit-menu-icon {
@@ -3517,9 +3736,28 @@ function renderUnifiedList(items, filters = {}) {
       }
 
       @media (max-width: 600px) {
-        .type-filter-bar { gap: 8px; padding: 8px; }
-        .filter-type-btn { padding: 8px 12px; font-size: 13px; }
-        .filter-type-btn span:last-child { display: none; }
+        .type-filter-bar {
+          position: static;
+          transform: none;
+          flex-direction: row;
+          border-radius: 50px;
+          margin-bottom: 16px;
+          left: auto;
+          top: auto;
+        }
+        .filter-type-btn { padding: 8px 12px; font-size: 11px; min-width: auto; min-height: auto; }
+        .filter-type-btn span:last-child { display: block; }
+
+        .action-buttons-bar {
+          position: static;
+          transform: none;
+          flex-direction: row;
+          border-radius: 50px;
+          margin-bottom: 24px;
+          right: auto;
+          top: auto;
+        }
+        .action-btn { padding: 8px 12px; font-size: 11px; min-width: auto; min-height: auto; }
       }
     </style>
 
