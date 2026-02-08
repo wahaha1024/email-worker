@@ -384,6 +384,9 @@ async function handleRequest(request, env) {
   if (path === '/api/stats') return handleStats(request, env);
   if (path.startsWith('/api/logs/')) return handleLogDetail(request, path.split('/')[3], env);
   if (path === '/diagnostics') return handleDiagnosticsPage(request, env);
+  if (path === '/live') return handleLivePage(request, env);
+  if (path === '/api/live-config' && request.method === 'GET') return handleGetLiveConfig(request, env);
+  if (path === '/api/live-config' && request.method === 'POST') return handleSaveLiveConfig(request, env);
 
   return new Response('Not Found', { status: 404 });
 }
@@ -608,6 +611,859 @@ async function handleDiagnosticsPage(request, env) {
   return new Response(html, { headers: { 'Content-Type': 'text/html; charset=utf-8' } });
 }
 
+// 获取实时面板配置
+async function handleGetLiveConfig(request, env) {
+  try {
+    // 尝试从数据库获取配置
+    const result = await env.DB.prepare(
+      "SELECT value FROM settings WHERE key = 'live_panel_config'"
+    ).first();
+
+    if (result && result.value) {
+      return new Response(result.value, {
+        headers: { 'Content-Type': 'application/json' }
+      });
+    }
+
+    // 返回默认配置
+    const defaultConfig = {
+      panel_1: {
+        title: '市场行情',
+        url: 'https://m.123.com.cn/wap2/market_live',
+        autoRefresh: false,
+        interval: 60,
+        x: 0, y: 0, width: 48, height: 100
+      },
+      panel_2: {
+        title: '财联社快讯',
+        url: 'https://api3.cls.cn/share/subject/1103?sv=859&os=web',
+        autoRefresh: false,
+        interval: 60,
+        x: 50, y: 0, width: 48, height: 100
+      }
+    };
+    return new Response(JSON.stringify(defaultConfig), {
+      headers: { 'Content-Type': 'application/json' }
+    });
+  } catch (e) {
+    return new Response(JSON.stringify({ error: e.message }), {
+      status: 500,
+      headers: { 'Content-Type': 'application/json' }
+    });
+  }
+}
+
+// 保存实时面板配置
+async function handleSaveLiveConfig(request, env) {
+  try {
+    const config = await request.json();
+    const configStr = JSON.stringify(config);
+
+    // 确保settings表存在
+    await env.DB.prepare(`
+      CREATE TABLE IF NOT EXISTS settings (
+        key TEXT PRIMARY KEY,
+        value TEXT,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      )
+    `).run();
+
+    // 插入或更新配置
+    await env.DB.prepare(`
+      INSERT OR REPLACE INTO settings (key, value, updated_at)
+      VALUES ('live_panel_config', ?, datetime('now'))
+    `).bind(configStr).run();
+
+    return new Response(JSON.stringify({ success: true }), {
+      headers: { 'Content-Type': 'application/json' }
+    });
+  } catch (e) {
+    return new Response(JSON.stringify({ error: e.message }), {
+      status: 500,
+      headers: { 'Content-Type': 'application/json' }
+    });
+  }
+}
+
+// 实时行情页面 - 嵌入外部市场数据
+async function handleLivePage(request, env) {
+  const content = `
+    <div class="live-container" id="liveContainer">
+      <!-- 窗口由JavaScript动态生成 -->
+    </div>
+
+    <!-- 添加窗口按钮 -->
+    <button class="add-panel-btn" onclick="addNewPanel()" title="添加窗口">
+      <span data-lucide="plus"></span>
+    </button>
+
+    <!-- 设置弹窗 -->
+    <div class="settings-modal" id="settingsModal">
+      <div class="settings-content">
+        <div class="settings-header">
+          <h3>面板设置</h3>
+          <button class="settings-close" onclick="closeSettings()">
+            <span data-lucide="x"></span>
+          </button>
+        </div>
+        <div class="settings-body">
+          <div class="settings-field">
+            <label>标题名称</label>
+            <input type="text" id="settingTitle" placeholder="输入标题">
+          </div>
+          <div class="settings-field">
+            <label>页面URL</label>
+            <input type="url" id="settingUrl" placeholder="https://...">
+          </div>
+          <div class="settings-field">
+            <label>自动刷新</label>
+            <div class="settings-row">
+              <label class="toggle">
+                <input type="checkbox" id="settingAutoRefresh">
+                <span class="toggle-slider"></span>
+              </label>
+              <input type="number" id="settingInterval" min="5" max="3600" value="60" class="interval-input">
+              <span class="interval-unit">秒</span>
+            </div>
+          </div>
+        </div>
+        <div class="settings-footer">
+          <button class="settings-btn delete" id="deleteBtn" onclick="deletePanel()">删除窗口</button>
+          <button class="settings-btn cancel" onclick="closeSettings()">取消</button>
+          <button class="settings-btn save" onclick="saveSettings()">保存</button>
+        </div>
+      </div>
+    </div>
+
+    <style>
+      /* 扩展容器宽度 */
+      body.live-page .main {
+        max-width: 100%;
+        padding: 20px 40px;
+      }
+      .live-container {
+        position: relative;
+        width: 100%;
+        height: calc(100vh - 140px);
+        padding: 0;
+      }
+      .live-panel {
+        position: absolute;
+        display: flex;
+        flex-direction: column;
+        background: var(--bg-card);
+        border-radius: var(--radius);
+        overflow: hidden;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.04);
+        border: 1px solid var(--border);
+        min-width: 200px;
+        min-height: 150px;
+      }
+      .panel-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 10px 16px;
+        background: var(--accent-light);
+        border-bottom: 1px solid var(--border);
+      }
+      .panel-header.drag-handle {
+        cursor: move;
+      }
+      .panel-title-group {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+      .panel-icon {
+        width: 18px;
+        height: 18px;
+        color: var(--accent);
+      }
+      .panel-title {
+        font-size: 14px;
+        font-weight: 600;
+        color: var(--text);
+      }
+      .panel-actions {
+        display: flex;
+        gap: 4px;
+      }
+      .panel-btn {
+        width: 32px;
+        height: 32px;
+        border: none;
+        background: transparent;
+        border-radius: 8px;
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        color: var(--text-secondary);
+        transition: all 0.2s;
+      }
+      .panel-btn:hover {
+        background: var(--hover-bg);
+        color: var(--accent);
+      }
+      .panel-btn [data-lucide] {
+        width: 16px;
+        height: 16px;
+      }
+      .panel-frame {
+        flex: 1;
+        overflow: hidden;
+      }
+      .mobile-iframe {
+        width: 100%;
+        height: 100%;
+        border: none;
+      }
+      /* 调整大小手柄 */
+      .resize-handle {
+        position: absolute;
+        background: transparent;
+        z-index: 10;
+      }
+      .resize-right {
+        right: 0;
+        top: 0;
+        width: 6px;
+        height: 100%;
+        cursor: ew-resize;
+      }
+      .resize-bottom {
+        bottom: 0;
+        left: 0;
+        width: 100%;
+        height: 6px;
+        cursor: ns-resize;
+      }
+      .resize-corner {
+        right: 0;
+        bottom: 0;
+        width: 16px;
+        height: 16px;
+        cursor: nwse-resize;
+      }
+      .resize-corner::after {
+        content: '';
+        position: absolute;
+        right: 3px;
+        bottom: 3px;
+        width: 8px;
+        height: 8px;
+        border-right: 2px solid var(--accent);
+        border-bottom: 2px solid var(--accent);
+        opacity: 0.5;
+      }
+      .live-panel:hover .resize-corner::after {
+        opacity: 1;
+      }
+      .live-panel.dragging,
+      .live-panel.resizing {
+        z-index: 100;
+        box-shadow: 0 8px 32px rgba(0,0,0,0.15);
+      }
+      .live-panel.dragging iframe,
+      .live-panel.resizing iframe {
+        pointer-events: none;
+      }
+      /* 添加窗口按钮 */
+      .add-panel-btn {
+        position: fixed;
+        right: 30px;
+        bottom: 100px;
+        width: 56px;
+        height: 56px;
+        border-radius: 50%;
+        border: none;
+        background: var(--accent);
+        color: white;
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        box-shadow: 0 4px 12px rgba(180, 167, 214, 0.4);
+        transition: all 0.2s;
+        z-index: 100;
+      }
+      .add-panel-btn:hover {
+        transform: scale(1.1);
+        box-shadow: 0 6px 20px rgba(180, 167, 214, 0.5);
+      }
+      .add-panel-btn [data-lucide] {
+        width: 24px;
+        height: 24px;
+      }
+      /* 设置弹窗 */
+      .settings-modal {
+        display: none;
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background: rgba(0,0,0,0.5);
+        z-index: 1000;
+        align-items: center;
+        justify-content: center;
+      }
+      .settings-modal.open {
+        display: flex;
+      }
+      .settings-content {
+        background: var(--bg-card);
+        border-radius: var(--radius);
+        width: 90%;
+        max-width: 400px;
+        box-shadow: 0 20px 60px rgba(0,0,0,0.2);
+      }
+      .settings-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 16px 20px;
+        border-bottom: 1px solid var(--border);
+      }
+      .settings-header h3 {
+        font-size: 16px;
+        font-weight: 600;
+        color: var(--text);
+      }
+      .settings-close {
+        width: 32px;
+        height: 32px;
+        border: none;
+        background: transparent;
+        border-radius: 8px;
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        color: var(--text-secondary);
+      }
+      .settings-close:hover {
+        background: var(--hover-bg);
+      }
+      .settings-close [data-lucide] {
+        width: 18px;
+        height: 18px;
+      }
+      .settings-body {
+        padding: 20px;
+      }
+      .settings-field {
+        margin-bottom: 16px;
+      }
+      .settings-field:last-child {
+        margin-bottom: 0;
+      }
+      .settings-field label {
+        display: block;
+        font-size: 13px;
+        font-weight: 500;
+        color: var(--text-secondary);
+        margin-bottom: 8px;
+      }
+      .settings-field input[type="text"],
+      .settings-field input[type="url"] {
+        width: 100%;
+        padding: 10px 12px;
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        font-size: 14px;
+        background: var(--bg);
+        color: var(--text);
+      }
+      .settings-field input:focus {
+        outline: none;
+        border-color: var(--accent);
+      }
+      .settings-row {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+      }
+      .toggle {
+        position: relative;
+        width: 44px;
+        height: 24px;
+        cursor: pointer;
+      }
+      .toggle input {
+        opacity: 0;
+        width: 0;
+        height: 0;
+      }
+      .toggle-slider {
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background: var(--border);
+        border-radius: 24px;
+        transition: 0.3s;
+      }
+      .toggle-slider:before {
+        content: "";
+        position: absolute;
+        width: 18px;
+        height: 18px;
+        left: 3px;
+        bottom: 3px;
+        background: white;
+        border-radius: 50%;
+        transition: 0.3s;
+      }
+      .toggle input:checked + .toggle-slider {
+        background: var(--accent);
+      }
+      .toggle input:checked + .toggle-slider:before {
+        transform: translateX(20px);
+      }
+      .interval-input {
+        width: 70px;
+        padding: 8px 10px;
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        font-size: 14px;
+        background: var(--bg);
+        color: var(--text);
+        text-align: center;
+      }
+      .interval-unit {
+        font-size: 13px;
+        color: var(--text-secondary);
+      }
+      .settings-footer {
+        display: flex;
+        gap: 12px;
+        padding: 16px 20px;
+        border-top: 1px solid var(--border);
+      }
+      .settings-btn {
+        flex: 1;
+        padding: 10px 16px;
+        border: none;
+        border-radius: 8px;
+        font-size: 14px;
+        font-weight: 500;
+        cursor: pointer;
+        transition: all 0.2s;
+      }
+      .settings-btn.delete {
+        background: #ff4757;
+        color: white;
+        flex: 0 0 auto;
+      }
+      .settings-btn.delete:hover {
+        background: #ff3344;
+      }
+      .settings-btn.cancel {
+        background: var(--bg);
+        color: var(--text-secondary);
+      }
+      .settings-btn.cancel:hover {
+        background: var(--hover-bg);
+      }
+      .settings-btn.save {
+        background: var(--accent);
+        color: white;
+      }
+      .settings-btn.save:hover {
+        opacity: 0.9;
+      }
+      /* 移动端 */
+      @media (max-width: 768px) {
+        body.live-page .main {
+          padding: 16px;
+        }
+        .live-container {
+          flex-direction: column;
+          height: auto;
+          min-height: calc(100vh - 140px);
+        }
+        .live-panel {
+          min-height: 50vh;
+        }
+      }
+    </style>
+
+    <script>
+      // 面板配置 - 动态对象
+      let panelConfig = {};
+
+      // 默认配置
+      const defaultPanels = {
+        panel_1: {
+          title: '市场行情',
+          url: 'https://m.123.com.cn/wap2/market_live',
+          autoRefresh: false,
+          interval: 60,
+          x: 0, y: 0, width: 48, height: 100
+        },
+        panel_2: {
+          title: '财联社快讯',
+          url: 'https://api3.cls.cn/share/subject/1103?sv=859&os=web',
+          autoRefresh: false,
+          interval: 60,
+          x: 50, y: 0, width: 48, height: 100
+        }
+      };
+
+      // 自动刷新定时器
+      const refreshTimers = {};
+
+      // 当前编辑的面板
+      let currentPanel = null;
+
+      // 拖拽状态
+      let dragState = null;
+
+      // 生成唯一ID
+      function generateId() {
+        return 'panel_' + Date.now() + '_' + Math.random().toString(36).substr(2, 5);
+      }
+
+      // 创建面板DOM
+      function createPanelElement(panelId, config) {
+        const div = document.createElement('div');
+        div.className = 'live-panel';
+        div.dataset.panel = panelId;
+        div.id = 'panel-' + panelId;
+        div.innerHTML = \`
+          <div class="panel-header drag-handle">
+            <div class="panel-title-group">
+              <span data-lucide="layout" class="panel-icon"></span>
+              <span class="panel-title">\${config.title}</span>
+            </div>
+            <div class="panel-actions">
+              <button class="panel-btn" onclick="goHome('\${panelId}')" title="主页">
+                <span data-lucide="home"></span>
+              </button>
+              <button class="panel-btn" onclick="refreshPanel('\${panelId}')" title="刷新">
+                <span data-lucide="refresh-cw"></span>
+              </button>
+              <button class="panel-btn" onclick="openSettings('\${panelId}')" title="设置">
+                <span data-lucide="settings"></span>
+              </button>
+            </div>
+          </div>
+          <div class="panel-frame">
+            <iframe
+              id="iframe-\${panelId}"
+              src="\${config.url}"
+              class="mobile-iframe"
+              frameborder="0"
+              allowfullscreen
+              sandbox="allow-scripts allow-same-origin allow-popups allow-forms"
+            ></iframe>
+          </div>
+          <div class="resize-handle resize-right" data-panel="\${panelId}" data-dir="right"></div>
+          <div class="resize-handle resize-bottom" data-panel="\${panelId}" data-dir="bottom"></div>
+          <div class="resize-handle resize-corner" data-panel="\${panelId}" data-dir="corner"></div>
+        \`;
+        div.style.left = config.x + '%';
+        div.style.top = config.y + '%';
+        div.style.width = config.width + '%';
+        div.style.height = config.height + '%';
+        return div;
+      }
+
+      // 渲染所有面板
+      function renderPanels() {
+        const container = document.getElementById('liveContainer');
+        container.innerHTML = '';
+        Object.keys(panelConfig).forEach(panelId => {
+          const el = createPanelElement(panelId, panelConfig[panelId]);
+          container.appendChild(el);
+        });
+        if (typeof lucide !== 'undefined') lucide.createIcons();
+        initDragResize();
+      }
+
+      // 从服务端加载配置
+      async function loadConfig() {
+        try {
+          const res = await fetch('/api/live-config');
+          if (res.ok) {
+            const config = await res.json();
+            if (config && Object.keys(config).length > 0) {
+              panelConfig = config;
+            } else {
+              panelConfig = { ...defaultPanels };
+            }
+          } else {
+            panelConfig = { ...defaultPanels };
+          }
+        } catch (e) {
+          console.log('Load config failed:', e);
+          panelConfig = { ...defaultPanels };
+        }
+        renderPanels();
+        setupAutoRefresh();
+      }
+
+      // 设置自动刷新
+      function setupAutoRefresh() {
+        Object.keys(refreshTimers).forEach(id => {
+          clearInterval(refreshTimers[id]);
+          delete refreshTimers[id];
+        });
+        Object.keys(panelConfig).forEach(panelId => {
+          const config = panelConfig[panelId];
+          if (config.autoRefresh && config.interval > 0) {
+            refreshTimers[panelId] = setInterval(() => {
+              refreshPanel(panelId);
+            }, config.interval * 1000);
+          }
+        });
+      }
+
+      // 主页 - 回到初始URL
+      function goHome(panelId) {
+        const config = panelConfig[panelId];
+        if (config) {
+          const iframe = document.getElementById('iframe-' + panelId);
+          if (iframe) {
+            iframe.src = config.url;
+          }
+        }
+      }
+
+      // 刷新面板
+      function refreshPanel(panelId) {
+        const iframe = document.getElementById('iframe-' + panelId);
+        const btn = document.querySelector('[data-panel="' + panelId + '"] .panel-btn');
+        if (btn) {
+          btn.classList.add('rotating');
+          setTimeout(() => btn.classList.remove('rotating'), 500);
+        }
+        if (iframe) iframe.src = iframe.src;
+      }
+
+      // 打开设置
+      function openSettings(panelId) {
+        currentPanel = panelId;
+        const config = panelConfig[panelId];
+
+        document.getElementById('settingTitle').value = config.title;
+        document.getElementById('settingUrl').value = config.url;
+        document.getElementById('settingAutoRefresh').checked = config.autoRefresh;
+        document.getElementById('settingInterval').value = config.interval;
+
+        // 显示删除按钮（至少保留一个窗口）
+        const deleteBtn = document.getElementById('deleteBtn');
+        deleteBtn.style.display = Object.keys(panelConfig).length > 1 ? 'block' : 'none';
+
+        document.getElementById('settingsModal').classList.add('open');
+        if (typeof lucide !== 'undefined') lucide.createIcons();
+      }
+
+      // 关闭设置
+      function closeSettings() {
+        document.getElementById('settingsModal').classList.remove('open');
+        currentPanel = null;
+      }
+
+      // 保存设置
+      async function saveSettings() {
+        if (!currentPanel) return;
+
+        const oldConfig = panelConfig[currentPanel];
+        panelConfig[currentPanel] = {
+          ...oldConfig,
+          title: document.getElementById('settingTitle').value || oldConfig.title,
+          url: document.getElementById('settingUrl').value || oldConfig.url,
+          autoRefresh: document.getElementById('settingAutoRefresh').checked,
+          interval: parseInt(document.getElementById('settingInterval').value) || 60
+        };
+
+        await saveConfigToServer();
+
+        // 更新DOM
+        const panelEl = document.querySelector('[data-panel="' + currentPanel + '"]');
+        if (panelEl) {
+          panelEl.querySelector('.panel-title').textContent = panelConfig[currentPanel].title;
+          const iframe = document.getElementById('iframe-' + currentPanel);
+          if (iframe) iframe.src = panelConfig[currentPanel].url;
+        }
+
+        setupAutoRefresh();
+        closeSettings();
+      }
+
+      // 删除面板
+      async function deletePanel() {
+        if (!currentPanel || Object.keys(panelConfig).length <= 1) return;
+
+        if (!confirm('确定要删除这个窗口吗？')) return;
+
+        delete panelConfig[currentPanel];
+        await saveConfigToServer();
+        renderPanels();
+        setupAutoRefresh();
+        closeSettings();
+      }
+
+      // 添加新面板
+      async function addNewPanel() {
+        const panelId = generateId();
+        const existingCount = Object.keys(panelConfig).length;
+
+        panelConfig[panelId] = {
+          title: '新窗口 ' + (existingCount + 1),
+          url: 'https://example.com',
+          autoRefresh: false,
+          interval: 60,
+          x: Math.min(existingCount * 10, 50),
+          y: Math.min(existingCount * 10, 50),
+          width: 40,
+          height: 60
+        };
+
+        await saveConfigToServer();
+        renderPanels();
+        setupAutoRefresh();
+
+        // 打开设置让用户配置
+        setTimeout(() => openSettings(panelId), 100);
+      }
+
+      // 保存配置到服务端
+      async function saveConfigToServer() {
+        try {
+          const res = await fetch('/api/live-config', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(panelConfig)
+          });
+          if (!res.ok) throw new Error('Save failed');
+        } catch (e) {
+          console.error('Save config failed:', e);
+        }
+      }
+
+      // 拖拽和调整大小
+      function initDragResize() {
+        const container = document.getElementById('liveContainer');
+        const containerRect = () => container.getBoundingClientRect();
+
+        // 拖拽开始
+        document.querySelectorAll('.drag-handle').forEach(handle => {
+          handle.onmousedown = (e) => {
+            if (e.target.closest('.panel-btn')) return;
+            const panel = handle.closest('.live-panel');
+            const panelId = panel.dataset.panel;
+            const rect = panel.getBoundingClientRect();
+            const cRect = containerRect();
+
+            dragState = {
+              type: 'drag',
+              panel: panelId,
+              startX: e.clientX,
+              startY: e.clientY,
+              startLeft: ((rect.left - cRect.left) / cRect.width) * 100,
+              startTop: ((rect.top - cRect.top) / cRect.height) * 100
+            };
+
+            panel.classList.add('dragging');
+            e.preventDefault();
+          };
+        });
+
+        // 调整大小开始
+        document.querySelectorAll('.resize-handle').forEach(handle => {
+          handle.onmousedown = (e) => {
+            const panel = handle.closest('.live-panel');
+            const panelId = panel.dataset.panel;
+            const dir = handle.dataset.dir;
+            const rect = panel.getBoundingClientRect();
+            const cRect = containerRect();
+
+            dragState = {
+              type: 'resize',
+              dir: dir,
+              panel: panelId,
+              startX: e.clientX,
+              startY: e.clientY,
+              startWidth: (rect.width / cRect.width) * 100,
+              startHeight: (rect.height / cRect.height) * 100
+            };
+
+            panel.classList.add('resizing');
+            e.preventDefault();
+          };
+        });
+      }
+
+      // 全局鼠标事件
+      document.addEventListener('mousemove', (e) => {
+        if (!dragState) return;
+
+        const container = document.getElementById('liveContainer');
+        const cRect = container.getBoundingClientRect();
+        const dx = ((e.clientX - dragState.startX) / cRect.width) * 100;
+        const dy = ((e.clientY - dragState.startY) / cRect.height) * 100;
+        const panel = document.getElementById('panel-' + dragState.panel);
+        const config = panelConfig[dragState.panel];
+
+        if (dragState.type === 'drag') {
+          const newX = Math.max(0, Math.min(100 - config.width, dragState.startLeft + dx));
+          const newY = Math.max(0, Math.min(100 - config.height, dragState.startTop + dy));
+          panel.style.left = newX + '%';
+          panel.style.top = newY + '%';
+          config.x = newX;
+          config.y = newY;
+        } else if (dragState.type === 'resize') {
+          if (dragState.dir === 'right' || dragState.dir === 'corner') {
+            const newWidth = Math.max(15, Math.min(100 - config.x, dragState.startWidth + dx));
+            panel.style.width = newWidth + '%';
+            config.width = newWidth;
+          }
+          if (dragState.dir === 'bottom' || dragState.dir === 'corner') {
+            const newHeight = Math.max(15, Math.min(100 - config.y, dragState.startHeight + dy));
+            panel.style.height = newHeight + '%';
+            config.height = newHeight;
+          }
+        }
+      });
+
+      document.addEventListener('mouseup', () => {
+        if (dragState) {
+          const panel = document.getElementById('panel-' + dragState.panel);
+          if (panel) panel.classList.remove('dragging', 'resizing');
+          saveConfigToServer();
+          dragState = null;
+        }
+      });
+
+      // 添加body类
+      document.body.classList.add('live-page');
+
+      // 页面加载时初始化
+      loadConfig();
+
+      // 添加旋转动画样式
+      const style = document.createElement('style');
+      style.textContent = \`
+        .panel-btn.rotating [data-lucide] {
+          animation: spin 0.5s ease;
+        }
+        @keyframes spin {
+          from { transform: rotate(0deg); }
+          to { transform: rotate(360deg); }
+        }
+      \`;
+      document.head.appendChild(style);
+    </script>
+  `;
+  const html = renderKoobaiPage({ page: 'live', content });
+  return new Response(html, { headers: { 'Content-Type': 'text/html; charset=utf-8' } });
+}
+
 async function handleLogDetail(request, logId, env) {
   try {
     const log = await env.DB.prepare('SELECT * FROM email_logs WHERE id = ?').bind(logId).first();
@@ -657,11 +1513,13 @@ function renderKoobaiPage({ page, emailId, content }) {
   const isDiagnostics = page === 'diagnostics';
 
   const isFeeds = page === 'feeds';
+  const isLive = page === 'live';
 
   const navButtons = [
     { id: 'inbox', icon: 'mail', label: '收件箱', href: '/', active: isInbox },
     { id: 'logs', icon: 'activity', label: '日志', href: '/logs', active: isLogs || isDiagnostics },
     { id: 'feeds', icon: 'rss', label: '订阅', href: '/feeds', active: isFeeds },
+    { id: 'live', icon: 'trending-up', label: '实时', href: '/live', active: isLive },
   ];
 
   const actionButtons = isInbox ? [
@@ -709,20 +1567,24 @@ body {
   font-size: 16px;
   line-height: 1.6;
   padding-bottom: 120px;
-  padding-left: 80px;  /* 左侧筛选栏空间 */
-  padding-right: 80px; /* 右侧功能栏空间 */
 }
 
 .main {
-  max-width: 720px;  /* 优化阅读宽度 */
+  max-width: 900px;  /* 从 720px 增加到 900px，更适合宽屏阅读 */
   margin: 0 auto;
   padding: 24px;
 }
 
+.email-detail {
+  background: var(--bg-card);
+  padding: 40px;     /* 增加内边距，提升阅读呼吸感 */
+  border-radius: var(--radius);
+  box-shadow: 0 1px 3px rgba(0,0,0,0.04);
+}
+
 @media (max-width: 1200px) {
-  body {
-    padding-left: 24px;
-    padding-right: 24px;
+  .main {
+    max-width: 100%;
   }
 }
 
@@ -940,54 +1802,70 @@ body {
   bottom: 30px;
   left: 50%;
   transform: translateX(-50%);
-  width: 600px;
-  max-width: 90vw;
-  background: rgba(242, 240, 235, 0.7);
+  min-width: 120px;
+  max-width: 600px;
+  width: auto;
+  background: rgba(242, 240, 235, 0.75);
   backdrop-filter: blur(20px) saturate(1.8);
   -webkit-backdrop-filter: blur(20px) saturate(1.8);
   border-radius: 50px;
-  padding: 16px 24px;
+  padding: 12px 20px;
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 4px;
-  box-shadow: rgba(0, 0, 0, 0.1) 0px 0px 1px 0px, rgba(0, 0, 0, 0.12) 0px 10px 30px 0px;
+  box-shadow: rgba(0, 0, 0, 0.08) 0px 2px 8px 0px, rgba(0, 0, 0, 0.08) 0px 8px 24px 0px;
   z-index: 1000;
 }
 
-.nav-menu { display: flex; align-items: center; gap: 24px; }
+.nav-menu {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
 
-.nav-divider { width: 1px; height: 20px; background: rgba(0, 0, 0, 0.1); }
+.nav-divider {
+  width: 1px;
+  height: 24px;
+  background: rgba(0, 0, 0, 0.08);
+  margin: 0 4px;
+}
 
 .nav-btn {
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 6px;
-  padding: 8px 12px;
-  font-size: 11px;
+  gap: 4px;
+  padding: 10px 16px;
+  font-size: 12.8px;
   color: #666666;
   background: transparent;
   border: none;
   cursor: pointer;
-  transition: all 0.2s ease;
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
   text-decoration: none;
-  min-width: 56px;
-  border-radius: 12px;
+  border-radius: 16px;
+  white-space: nowrap;
+  font-weight: 400;
+  letter-spacing: 0.2px;
 }
 
 .nav-btn:hover {
   color: var(--accent);
-  background: rgba(180, 167, 214, 0.08);
+  background: rgba(180, 167, 214, 0.1);
+  transform: translateY(-1px);
 }
 
 .nav-btn.active {
   color: var(--accent);
-  background: var(--accent-light);
+  background: rgba(180, 167, 214, 0.15);
+  font-weight: 500;
 }
 
-.nav-btn:disabled { opacity: 0.35; cursor: not-allowed; }
+.nav-btn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
 
 .nav-btn .icon {
   width: 20px;
@@ -1003,84 +1881,8 @@ body {
   stroke-width: 2;
   stroke-linecap: round;
   stroke-linejoin: round;
-}
-
-/* 左侧筛选栏 */
-.left-sidebar {
-  position: fixed;
-  left: 20px;
-  top: 50%;
-  transform: translateY(-50%);
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  z-index: 999;
-}
-
-.sidebar-btn {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  width: 64px;
-  padding: 12px 8px;
-  background: rgba(242, 240, 235, 0.7);
-  backdrop-filter: blur(20px) saturate(1.8);
-  -webkit-backdrop-filter: blur(20px) saturate(1.8);
-  border-radius: 20px;
-  border: none;
-  color: #666666;
-  font-size: 11px;
-  cursor: pointer;
-  transition: all 0.2s ease;
-  text-decoration: none;
-  box-shadow: rgba(0, 0, 0, 0.08) 0px 2px 8px;
-}
-
-.sidebar-btn:hover {
-  color: var(--accent);
-  background: rgba(242, 240, 235, 0.85);
-  transform: translateX(4px);
-}
-
-.sidebar-btn.active {
-  color: var(--accent);
-  background: rgba(180, 167, 214, 0.15);
-  box-shadow: rgba(180, 167, 214, 0.3) 0px 4px 12px;
-}
-
-.sidebar-btn .icon {
-  width: 20px;
-  height: 20px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.sidebar-btn .icon svg {
-  width: 20px;
-  height: 20px;
-  stroke-width: 2;
-}
-
-/* 右侧功能栏 */
-.right-sidebar {
-  position: fixed;
-  right: 20px;
-  top: 50%;
-  transform: translateY(-50%);
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  z-index: 999;
-}
-
-@media (max-width: 1200px) {
-  .left-sidebar,
-  .right-sidebar {
-    display: none;
-  }
+  fill: none;
+  stroke: currentColor;
 }
 
 /* 日志页面 */
@@ -1214,17 +2016,18 @@ body {
   .email-log-sender-tag { font-size: 11px; }
   
   /* 底部导航移动端 */
-  .bottom-nav { 
-    bottom: 12px; 
-    width: calc(100% - 24px); 
-    max-width: none; 
-    padding: 12px 16px; 
+  .bottom-nav {
+    bottom: 12px;
+    width: auto;
+    min-width: auto;
+    max-width: calc(100% - 24px);
+    padding: 10px 16px;
     border-radius: 40px;
     backdrop-filter: blur(16px) saturate(1.5);
     -webkit-backdrop-filter: blur(16px) saturate(1.5);
   }
-  .nav-menu { gap: 12px; }
-  .nav-btn { font-size: 11px; gap: 4px; }
+  .nav-menu { gap: 6px; }
+  .nav-btn { font-size: 11px; gap: 4px; padding: 8px 12px; }
   .nav-btn .icon svg { width: 18px; height: 18px; }
   
   .email-detail { padding: 20px; }
@@ -1246,42 +2049,6 @@ body {
 </style>
 </head>
 <body>
-
-<!-- 左侧类型筛选栏 -->
-${isInbox ? `
-<div class="left-sidebar">
-  <a href="/?type=all" class="sidebar-btn ${!page || page === 'inbox' ? 'active' : ''}">
-    <span class="icon" data-lucide="layers"></span>
-    <span>全部</span>
-  </a>
-  <a href="/?type=email" class="sidebar-btn">
-    <span class="icon" data-lucide="mail"></span>
-    <span>邮件</span>
-  </a>
-  <a href="/?type=rss" class="sidebar-btn">
-    <span class="icon" data-lucide="rss"></span>
-    <span>RSS</span>
-  </a>
-</div>
-` : ''}
-
-<!-- 右侧功能栏 -->
-${isInbox ? `
-<div class="right-sidebar">
-  <button class="sidebar-btn" id="filterBtn" onclick="toggleFilterMenu()">
-    <span class="icon" data-lucide="filter"></span>
-    <span>筛选</span>
-  </button>
-  <button class="sidebar-btn" id="searchBtn" onclick="toggleSearchBox()">
-    <span class="icon" data-lucide="search"></span>
-    <span>搜索</span>
-  </button>
-  <button class="sidebar-btn" id="editBtn" onclick="toggleEditMenu()">
-    <span class="icon" data-lucide="edit-3"></span>
-    <span>编辑</span>
-  </button>
-</div>
-` : ''}
 
 <main class="main">
   ${content}
@@ -1313,10 +2080,47 @@ ${isInbox ? `
 </div>
 
 <script>
-  // 初始化 Lucide 图标
-  if (typeof lucide !== 'undefined') {
-    lucide.createIcons();
+  // 初始化 Lucide 图标 - 多重保险机制
+  function initLucideIcons() {
+    if (typeof lucide !== 'undefined') {
+      try {
+        lucide.createIcons();
+        console.log('✓ Lucide icons initialized');
+        return true;
+      } catch (error) {
+        console.error('✗ Failed to initialize Lucide icons:', error);
+        return false;
+      }
+    } else {
+      console.warn('⚠ Lucide library not loaded');
+      return false;
+    }
   }
+
+  // 尝试多次初始化
+  let initAttempts = 0;
+  const maxAttempts = 5;
+
+  function tryInitIcons() {
+    if (initLucideIcons() || initAttempts >= maxAttempts) {
+      return;
+    }
+    initAttempts++;
+    setTimeout(tryInitIcons, 200);
+  }
+
+  // DOM 加载完成后初始化
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', tryInitIcons);
+  } else {
+    // 如果 DOM 已加载，立即初始化
+    tryInitIcons();
+  }
+
+  // 窗口加载完成后再次初始化（最后保险）
+  window.addEventListener('load', function() {
+    setTimeout(initLucideIcons, 100);
+  });
 
   let selectMode = false;
   let selectedIds = new Set();
@@ -1342,6 +2146,15 @@ ${isInbox ? `
     // 关闭搜索框
     if (filterMenuOpen && searchBoxOpen) {
       toggleSearchBox();
+    }
+  }
+
+  // 关闭 FAB 菜单
+  function closeFabMenu() {
+    // FAB 菜单通过 CSS hover 控制，此函数用于兼容性
+    const fabMain = document.getElementById('fabMain');
+    if (fabMain) {
+      fabMain.blur();
     }
   }
 
@@ -2126,7 +2939,7 @@ function renderDiagnosticsContent(data) {
 
   return `
     <h1 class="page-title">系统诊断</h1>
-    <p class="page-subtitle">邮件系统状态检查 · ${new Date(data.timestamp).toLocaleString('zh-CN')}</p>
+    <p class="page-subtitle">邮件系统状态检查 · ${new Date(data.timestamp).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' })}</p>
 
     <div class="diagnostics-grid">
       <!-- 邮件统计卡片 -->
@@ -2426,36 +3239,77 @@ function formatTime(dateString) {
   if (!dateString) return '';
   const date = new Date(dateString);
   const now = new Date();
+  const options = { timeZone: 'Asia/Shanghai' };
   if (now - date < 24 * 60 * 60 * 1000 && now.getDate() === date.getDate()) {
-    return date.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
+    return date.toLocaleTimeString('zh-CN', { ...options, hour: '2-digit', minute: '2-digit' });
   }
-  return date.toLocaleDateString('zh-CN', { month: 'numeric', day: 'numeric' });
+  return date.toLocaleDateString('zh-CN', { ...options, month: 'numeric', day: 'numeric' });
 }
 
-// Koobai 风格日期格式：01月24日 15:55
+// Koobai 风格日期格式：01月24日 15:55 (东八区)
 function formatKoobaiDate(dateString) {
   if (!dateString) return '';
   const date = new Date(dateString);
-  const month = String(date.getMonth() + 1).padStart(2, '0');
-  const day = String(date.getDate()).padStart(2, '0');
-  const hours = String(date.getHours()).padStart(2, '0');
-  const minutes = String(date.getMinutes()).padStart(2, '0');
-  return `${month}月${day}日 ${hours}:${minutes}`;
+  // 转换为东八区时间
+  const options = { timeZone: 'Asia/Shanghai', hour12: false };
+  const formatter = new Intl.DateTimeFormat('zh-CN', {
+    ...options,
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit'
+  });
+  const parts = formatter.formatToParts(date);
+  const month = parts.find(p => p.type === 'month')?.value || '';
+  const day = parts.find(p => p.type === 'day')?.value || '';
+  const hour = parts.find(p => p.type === 'hour')?.value || '';
+  const minute = parts.find(p => p.type === 'minute')?.value || '';
+  return `${month}月${day}日 ${hour}:${minute}`;
 }
 
 function formatFullTime(dateString) {
   if (!dateString) return '';
-  return new Date(dateString).toLocaleString('zh-CN');
+  return new Date(dateString).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' });
 }
 
 function formatShortTime(dateString) {
   if (!dateString) return '';
-  return new Date(dateString).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
+  return new Date(dateString).toLocaleTimeString('zh-CN', { timeZone: 'Asia/Shanghai', hour: '2-digit', minute: '2-digit' });
 }
 
 function escapeHtml(text) {
   if (!text) return '';
   return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+// HTML 实体解码（处理双重编码的 RSS 内容）
+function decodeHtmlEntities(html) {
+  if (!html) return '';
+  const entities = {
+    '&lt;': '<', '&gt;': '>', '&amp;': '&', '&quot;': '"',
+    '&#039;': "'", '&apos;': "'", '&nbsp;': ' ',
+    '&ndash;': '\u2013', '&mdash;': '\u2014',
+    '&lsquo;': '\u2018', '&rsquo;': '\u2019',
+    '&ldquo;': '\u201C', '&rdquo;': '\u201D',
+    '&hellip;': '\u2026', '&copy;': '\u00A9',
+    '&reg;': '\u00AE', '&trade;': '\u2122',
+    '&bull;': '\u2022', '&middot;': '\u00B7', '&deg;': '\u00B0'
+  };
+  let result = html.replace(/&[a-z]+;/gi, m => entities[m.toLowerCase()] || m);
+  result = result.replace(/&#(\d+);/g, (m, d) => String.fromCharCode(parseInt(d, 10)));
+  result = result.replace(/&#x([0-9a-f]+);/gi, (m, h) => String.fromCharCode(parseInt(h, 16)));
+  return result;
+}
+
+// 深度解码（处理多重编码）
+function deepDecodeHTML(html) {
+  if (!html) return '';
+  let prev = '', current = html;
+  for (let i = 0; i < 3 && current !== prev; i++) {
+    prev = current;
+    current = decodeHtmlEntities(current);
+  }
+  return current;
 }
 
 // ============ API 处理 ============
@@ -2956,6 +3810,9 @@ function renderFeedsManagement(feeds) {
         <div class="feed-stat ${feed.is_active ? 'status-active' : 'status-inactive'}">
           <span data-lucide="${feed.is_active ? 'check-circle' : 'x-circle'}"></span>
           <span>${feed.is_active ? '启用' : '禁用'}</span>
+          <button class="toggle-btn-small" onclick="toggleFeedStatus(${feed.id}, ${feed.is_active ? 0 : 1})" title="${feed.is_active ? '禁用' : '启用'}">
+            ${feed.is_active ? '禁用' : '启用'}
+          </button>
         </div>
       </div>
       ${feed.last_error ? `
@@ -3025,6 +3882,53 @@ function renderFeedsManagement(feeds) {
         <div class="modal-buttons">
           <button class="modal-btn modal-btn-cancel" onclick="closeAddFeedModal()">取消</button>
           <button class="modal-btn modal-btn-confirm" onclick="confirmAddFeed()">添加订阅</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 编辑订阅弹窗 -->
+    <div class="modal-overlay" id="editFeedModal">
+      <div class="modal">
+        <div class="modal-title">✏️ 编辑 RSS 订阅</div>
+        <div class="modal-body">
+          <label class="form-label">订阅源名称</label>
+          <input type="text" class="modal-input" id="editFeedName" placeholder="例如：阮一峰的网络日志">
+
+          <label class="form-label">RSS 地址</label>
+          <input type="url" class="modal-input" id="editFeedUrl" placeholder="https://example.com/feed">
+
+          <label class="form-label">分类</label>
+          <div class="category-buttons" id="editCategoryButtons">
+            <button class="category-btn" data-category="tech">技术</button>
+            <button class="category-btn" data-category="news">新闻</button>
+            <button class="category-btn" data-category="blog">博客</button>
+            <button class="category-btn" data-category="other">其他</button>
+          </div>
+
+          <label class="form-label">
+            抓取频率 (Cron 表达式)
+            <span class="form-help" title="格式: 分 时 日 月 周&#10;例如: 0 * * * * (每小时)&#10;0 */6 * * * (每6小时)">ⓘ</span>
+          </label>
+          <input type="text" class="modal-input" id="editFeedCron" value="0 * * * *" placeholder="0 * * * *">
+          <div class="cron-presets">
+            <button class="preset-btn" onclick="setEditCron('0 * * * *')">每小时</button>
+            <button class="preset-btn" onclick="setEditCron('0 */6 * * *')">每6小时</button>
+            <button class="preset-btn" onclick="setEditCron('0 0 * * *')">每天</button>
+          </div>
+
+          <label class="form-label">状态</label>
+          <div class="toggle-switch">
+            <input type="checkbox" id="editFeedActive" class="toggle-input">
+            <label for="editFeedActive" class="toggle-label">
+              <span class="toggle-slider"></span>
+              <span class="toggle-text-off">禁用</span>
+              <span class="toggle-text-on">启用</span>
+            </label>
+          </div>
+        </div>
+        <div class="modal-buttons">
+          <button class="modal-btn modal-btn-cancel" onclick="closeEditFeedModal()">取消</button>
+          <button class="modal-btn modal-btn-confirm" onclick="confirmEditFeed()">保存</button>
         </div>
       </div>
     </div>
@@ -3133,6 +4037,81 @@ function renderFeedsManagement(feeds) {
       .feed-stat svg { width: 14px; height: 14px; }
       .feed-stat.status-active { color: #22c55e; }
       .feed-stat.status-inactive { color: #ef4444; }
+
+      .toggle-btn-small {
+        margin-left: 8px;
+        padding: 2px 8px;
+        font-size: 11px;
+        border-radius: 4px;
+        border: 1px solid currentColor;
+        background: transparent;
+        color: inherit;
+        cursor: pointer;
+        transition: all 0.2s;
+      }
+      .toggle-btn-small:hover { background: rgba(0,0,0,0.05); }
+
+      /* 切换开关样式 */
+      .toggle-switch {
+        margin-top: 8px;
+      }
+
+      .toggle-input {
+        display: none;
+      }
+
+      .toggle-label {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        cursor: pointer;
+        user-select: none;
+      }
+
+      .toggle-slider {
+        position: relative;
+        width: 48px;
+        height: 24px;
+        background: #ddd;
+        border-radius: 24px;
+        transition: all 0.3s;
+        flex-shrink: 0;
+      }
+
+      .toggle-slider::before {
+        content: '';
+        position: absolute;
+        width: 20px;
+        height: 20px;
+        border-radius: 50%;
+        background: white;
+        top: 2px;
+        left: 2px;
+        transition: all 0.3s;
+        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+      }
+
+      .toggle-input:checked + .toggle-label .toggle-slider {
+        background: var(--accent);
+      }
+
+      .toggle-input:checked + .toggle-label .toggle-slider::before {
+        left: 26px;
+      }
+
+      .toggle-text-off,
+      .toggle-text-on {
+        font-size: 14px;
+        color: var(--text-secondary);
+      }
+
+      .toggle-input:checked + .toggle-label .toggle-text-off {
+        display: none;
+      }
+
+      .toggle-input:not(:checked) + .toggle-label .toggle-text-on {
+        display: none;
+      }
 
       .feed-error {
         margin-top: 12px;
@@ -3300,9 +4279,120 @@ function renderFeedsManagement(feeds) {
         }
       }
 
-      function editFeed(id) {
-        alert('编辑功能开发中...');
+      async function toggleFeedStatus(id, active) {
+        try {
+          const response = await fetch(\`/api/feeds/\${id}\`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ is_active: active === 1 })
+          });
+          const result = await response.json();
+          if (result.success) {
+            location.reload();
+          } else {
+            alert('操作失败：' + result.error);
+          }
+        } catch (error) {
+          alert('操作失败：' + error.message);
+        }
       }
+
+      function editFeed(id) {
+        // 获取当前订阅源数据
+        fetch(\`/api/feeds\`)
+          .then(res => res.json())
+          .then(data => {
+            const feed = data.feeds.find(f => f.id === id);
+            if (!feed) {
+              alert('订阅源不存在');
+              return;
+            }
+
+            // 填充表单
+            document.getElementById('editFeedName').value = feed.name;
+            document.getElementById('editFeedUrl').value = feed.url;
+            document.getElementById('editFeedCron').value = feed.cron_expression || '0 * * * *';
+            document.getElementById('editFeedActive').checked = feed.is_active === 1;
+
+            // 设置分类
+            document.querySelectorAll('#editCategoryButtons .category-btn').forEach(btn => {
+              btn.classList.remove('active');
+              if (btn.dataset.category === feed.category) {
+                btn.classList.add('active');
+              }
+            });
+
+            // 存储当前编辑的 ID
+            window.currentEditFeedId = id;
+
+            // 显示弹窗
+            document.getElementById('editFeedModal').classList.add('show');
+          })
+          .catch(err => {
+            alert('获取订阅源信息失败：' + err.message);
+          });
+      }
+
+      function closeEditFeedModal() {
+        document.getElementById('editFeedModal').classList.remove('show');
+        window.currentEditFeedId = null;
+      }
+
+      function setEditCron(cron) {
+        document.getElementById('editFeedCron').value = cron;
+      }
+
+      async function confirmEditFeed() {
+        if (!window.currentEditFeedId) {
+          alert('无效的编辑操作');
+          return;
+        }
+
+        const name = document.getElementById('editFeedName').value.trim();
+        const url = document.getElementById('editFeedUrl').value.trim();
+        const cron = document.getElementById('editFeedCron').value.trim();
+        const isActive = document.getElementById('editFeedActive').checked;
+        const category = document.querySelector('#editCategoryButtons .category-btn.active')?.dataset.category || 'tech';
+
+        if (!name || !url) {
+          alert('请填写订阅源名称和地址');
+          return;
+        }
+
+        try {
+          const response = await fetch(\`/api/feeds/\${window.currentEditFeedId}\`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              name,
+              url,
+              category,
+              cron_expression: cron,
+              is_active: isActive
+            })
+          });
+
+          const result = await response.json();
+          if (result.success) {
+            alert('订阅源更新成功！');
+            location.reload();
+          } else {
+            alert('更新失败：' + result.error);
+          }
+        } catch (error) {
+          alert('更新失败：' + error.message);
+        }
+      }
+
+      // 编辑弹窗的分类按钮事件
+      document.addEventListener('DOMContentLoaded', () => {
+        document.querySelectorAll('#editCategoryButtons .category-btn').forEach(btn => {
+          btn.addEventListener('click', () => {
+            document.querySelectorAll('#editCategoryButtons .category-btn').forEach(b => b.classList.remove('active'));
+            btn.classList.add('active');
+          });
+        });
+      });
 
       if (typeof lucide !== 'undefined') {
         lucide.createIcons();
@@ -3313,10 +4403,13 @@ function renderFeedsManagement(feeds) {
 
 // 渲染 RSS 文章详情
 function renderArticleDetail(article) {
-  const content = article.content_html || `<pre style="white-space:pre-wrap;font-family:inherit">${escapeHtml(article.content_text || article.description || '')}</pre>`;
+  // 深度解码 HTML 内容（处理双重编码的 RSS 源）
+  const rawContent = article.content_html || '';
+  const decodedContent = deepDecodeHTML(rawContent);
+  const content = decodedContent || `<div class="text-content">${escapeHtml(article.content_text || article.description || '')}</div>`;
 
   return `
-    <div class="email-detail">
+    <div class="email-detail article-detail">
       <div class="email-detail-header">
         <div class="article-source">
           <span data-lucide="rss"></span>
@@ -3330,7 +4423,7 @@ function renderArticleDetail(article) {
           <a href="${article.link}" target="_blank" rel="noopener">查看原文 ↗</a>
         </div>
       </div>
-      <div class="email-detail-body">${content}</div>
+      <div class="email-detail-body article-content">${content}</div>
     </div>
 
     <style>
@@ -3338,11 +4431,56 @@ function renderArticleDetail(article) {
         display: flex;
         align-items: center;
         gap: 6px;
-        font-size: 13px;
-        color: #3b82f6;
-        margin-bottom: 12px;
+        font-size: 14px;
+        color: var(--accent);
+        margin-bottom: 16px;
       }
       .article-source svg { width: 16px; height: 16px; }
+
+      .article-detail {
+        max-width: 900px;
+        margin: 0 auto;
+        padding: 40px;
+        line-height: 1.8;
+      }
+
+      .article-content {
+        font-size: 17px;
+        color: #333;
+      }
+
+      .article-content img {
+        max-width: 100%;
+        height: auto;
+        border-radius: 8px;
+        margin: 20px 0;
+      }
+
+      .article-content pre, .article-content code {
+        background: #f5f5f5;
+        padding: 4px 8px;
+        border-radius: 4px;
+        font-family: var(--font);
+        font-size: 15px;
+      }
+
+      .article-content pre {
+        padding: 16px;
+        overflow-x: auto;
+        margin: 20px 0;
+      }
+
+      .article-content blockquote {
+        border-left: 4px solid var(--accent);
+        padding-left: 20px;
+        margin-left: 0;
+        color: #666;
+        font-style: italic;
+      }
+
+      .text-content {
+        white-space: pre-wrap;
+      }
     </style>
 
     <script>
@@ -3403,21 +4541,26 @@ function renderUnifiedList(items, filters = {}) {
     </div>
   `;
 
-  // 右侧功能按钮
-  const actionButtons = `
-    <div class="action-buttons-bar">
-      <button class="action-btn" id="filterBtn" onclick="toggleFilterMenu()">
-        <span data-lucide="filter"></span>
-        <span>筛选</span>
+  // 右下角圆形悬浮按钮（FAB）
+  const fabButton = `
+    <div class="fab-container" id="fabContainer">
+      <button class="fab-main" id="fabMain">
+        <span data-lucide="menu" class="fab-icon"></span>
       </button>
-      <button class="action-btn" id="searchBtn" onclick="toggleSearchBox()">
-        <span data-lucide="search"></span>
-        <span>搜索</span>
-      </button>
-      <button class="action-btn" id="editBtn" onclick="toggleEditMenu()">
-        <span data-lucide="edit-3"></span>
-        <span>编辑</span>
-      </button>
+      <div class="fab-menu" id="fabMenu">
+        <button class="fab-menu-item" onclick="toggleFilterMenu(); closeFabMenu()">
+          <span data-lucide="filter" class="fab-menu-icon"></span>
+          <span>筛选</span>
+        </button>
+        <button class="fab-menu-item" onclick="toggleSearchBox(); closeFabMenu()">
+          <span data-lucide="search" class="fab-menu-icon"></span>
+          <span>搜索</span>
+        </button>
+        <button class="fab-menu-item" onclick="toggleEditMenu(); closeFabMenu()">
+          <span data-lucide="edit-3" class="fab-menu-icon"></span>
+          <span>编辑</span>
+        </button>
+      </div>
     </div>
   `;
 
@@ -3480,7 +4623,7 @@ function renderUnifiedList(items, filters = {}) {
     ${searchBoxHtml}
     ${editMenuHtml}
     ${typeFilters}
-    ${actionButtons}
+    ${fabButton}
 
     ${items.length > 0 ? `
       <div class="email-list">
@@ -3548,46 +4691,116 @@ function renderUnifiedList(items, filters = {}) {
         margin-left: 4px;
       }
 
-      /* 右侧功能按钮栏 */
-      .action-buttons-bar {
+      /* 右下角圆形悬浮按钮（FAB） */
+      .fab-container {
         position: fixed;
         right: 24px;
-        top: 50%;
-        transform: translateY(-50%);
-        display: flex;
-        flex-direction: column;
-        gap: 12px;
-        padding: 12px;
-        background: rgba(242, 240, 235, 0.5);
-        backdrop-filter: blur(20px) saturate(1.8);
-        -webkit-backdrop-filter: blur(20px) saturate(1.8);
-        border-radius: 50px;
-        box-shadow: rgba(0, 0, 0, 0.1) 0px 0px 1px 0px, rgba(0, 0, 0, 0.12) 0px 10px 30px 0px;
+        bottom: 120px;
         z-index: 999;
       }
 
-      .action-btn {
+      .fab-main {
+        width: 56px;
+        height: 56px;
+        border-radius: 50%;
+        background: var(--accent);
+        color: white;
+        border: none;
+        box-shadow: 0 4px 12px rgba(180, 167, 214, 0.4), 0 8px 24px rgba(0, 0, 0, 0.15);
+        cursor: pointer;
         display: flex;
-        flex-direction: column;
         align-items: center;
         justify-content: center;
-        gap: 6px;
-        padding: 12px;
-        background: transparent;
-        color: var(--text-secondary);
-        border: none;
-        border-radius: 50%;
-        font-size: 11px;
-        cursor: pointer;
-        transition: all 0.2s;
-        min-width: 60px;
-        min-height: 60px;
+        transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+        position: relative;
       }
-      .action-btn svg { width: 20px; height: 20px; }
-      .action-btn:hover { background: var(--hover-bg); color: var(--text); }
-      .action-btn.active {
-        background: var(--accent-light);
+
+      .fab-main:hover {
+        transform: scale(1.1);
+        box-shadow: 0 6px 16px rgba(180, 167, 214, 0.5), 0 12px 32px rgba(0, 0, 0, 0.2);
+      }
+
+      .fab-main:active {
+        transform: scale(0.95);
+      }
+
+      .fab-icon {
+        width: 24px;
+        height: 24px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+
+      .fab-icon svg {
+        width: 24px;
+        height: 24px;
+        stroke-width: 2;
+        stroke: currentColor;
+        fill: none;
+      }
+
+      /* FAB 弹出菜单 */
+      .fab-menu {
+        position: absolute;
+        bottom: 70px;
+        right: 0;
+        background: var(--bg-card);
+        border-radius: var(--radius);
+        padding: 8px;
+        box-shadow: 0 8px 32px rgba(0, 0, 0, 0.15);
+        min-width: 160px;
+        opacity: 0;
+        visibility: hidden;
+        transform: translateY(10px) scale(0.9);
+        transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+        backdrop-filter: blur(20px) saturate(1.5);
+        -webkit-backdrop-filter: blur(20px) saturate(1.5);
+      }
+
+      .fab-container:hover .fab-menu,
+      .fab-menu:hover {
+        opacity: 1;
+        visibility: visible;
+        transform: translateY(0) scale(1);
+      }
+
+      .fab-menu-item {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        padding: 12px 16px;
+        border-radius: var(--radius-sm);
+        background: transparent;
+        border: none;
+        color: var(--text);
+        font-size: 14px;
+        cursor: pointer;
+        transition: all 0.2s ease;
+        width: 100%;
+        text-align: left;
+      }
+
+      .fab-menu-item:hover {
+        background: var(--hover-bg);
         color: var(--accent);
+      }
+
+      .fab-menu-icon {
+        width: 18px;
+        height: 18px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        flex-shrink: 0;
+      }
+
+      .fab-menu-icon svg {
+        width: 18px;
+        height: 18px;
+        stroke-width: 2;
+        stroke: currentColor;
+        fill: none;
       }
 
       /* 筛选菜单 */
@@ -3744,268 +4957,32 @@ function renderUnifiedList(items, filters = {}) {
           margin-bottom: 16px;
           left: auto;
           top: auto;
+          justify-content: center;
         }
-        .filter-type-btn { padding: 8px 12px; font-size: 11px; min-width: auto; min-height: auto; }
-        .filter-type-btn span:last-child { display: block; }
+        .filter-type-btn {
+          padding: 8px 12px;
+          font-size: 11px;
+          min-width: auto;
+          min-height: auto;
+        }
+        .filter-type-btn span:last-child {
+          display: block;
+        }
 
-        .action-buttons-bar {
-          position: static;
-          transform: none;
-          flex-direction: row;
-          border-radius: 50px;
-          margin-bottom: 24px;
-          right: auto;
-          top: auto;
+        .fab-container {
+          right: 16px;
+          bottom: 100px;
         }
-        .action-btn { padding: 8px 12px; font-size: 11px; min-width: auto; min-height: auto; }
+        .fab-main {
+          width: 48px;
+          height: 48px;
+        }
+        .fab-icon svg {
+          width: 20px;
+          height: 20px;
+        }
       }
     </style>
-
-    <script>
-      if (typeof lucide !== 'undefined') {
-        lucide.createIcons();
-      }
-
-      // 全局变量
-      let selectMode = false;
-      let selectedIds = new Set();
-      let filterMenuOpen = false;
-      let searchBoxOpen = false;
-      let editMenuOpen = false;
-
-      // 切换筛选菜单
-      function toggleFilterMenu() {
-        filterMenuOpen = !filterMenuOpen;
-        const menu = document.getElementById('filterMenu');
-        const btn = document.getElementById('filterBtn');
-
-        if (menu) {
-          menu.style.display = filterMenuOpen ? 'block' : 'none';
-        }
-        if (btn) {
-          if (filterMenuOpen) btn.classList.add('active');
-          else btn.classList.remove('active');
-        }
-
-        // 关闭搜索框和编辑菜单
-        if (filterMenuOpen) {
-          if (searchBoxOpen) toggleSearchBox();
-          if (editMenuOpen) toggleEditMenu();
-        }
-      }
-
-      // 切换搜索框
-      function toggleSearchBox() {
-        searchBoxOpen = !searchBoxOpen;
-        const box = document.getElementById('searchBox');
-        const btn = document.getElementById('searchBtn');
-        const input = document.getElementById('searchInput');
-
-        if (box) {
-          box.style.display = searchBoxOpen ? 'block' : 'none';
-        }
-        if (btn) {
-          if (searchBoxOpen) btn.classList.add('active');
-          else btn.classList.remove('active');
-        }
-
-        // 聚焦输入框
-        if (searchBoxOpen && input) {
-          setTimeout(() => input.focus(), 100);
-        }
-
-        // 关闭其他菜单
-        if (searchBoxOpen) {
-          if (filterMenuOpen) toggleFilterMenu();
-          if (editMenuOpen) toggleEditMenu();
-        }
-      }
-
-      // 切换编辑菜单
-      function toggleEditMenu() {
-        editMenuOpen = !editMenuOpen;
-        const menu = document.getElementById('editMenu');
-        const btn = document.getElementById('editBtn');
-
-        if (menu) {
-          menu.style.display = editMenuOpen ? 'block' : 'none';
-        }
-        if (btn) {
-          if (editMenuOpen) btn.classList.add('active');
-          else btn.classList.remove('active');
-        }
-
-        // 关闭其他菜单
-        if (editMenuOpen) {
-          if (filterMenuOpen) toggleFilterMenu();
-          if (searchBoxOpen) toggleSearchBox();
-        }
-      }
-
-      // 执行搜索
-      function doSearch() {
-        const input = document.getElementById('searchInput');
-        const query = input ? input.value.trim() : '';
-        const currentType = new URLSearchParams(window.location.search).get('type') || 'all';
-        if (query) {
-          window.location.href = '/?type=' + currentType + '&search=' + encodeURIComponent(query);
-        } else {
-          window.location.href = '/?type=' + currentType;
-        }
-      }
-
-      // 回车搜索
-      document.addEventListener('DOMContentLoaded', function() {
-        const searchInput = document.getElementById('searchInput');
-        if (searchInput) {
-          searchInput.addEventListener('keypress', function(e) {
-            if (e.key === 'Enter') {
-              doSearch();
-            }
-          });
-        }
-
-        // 点击邮件项时的处理
-        document.querySelectorAll('.email-item').forEach(item => {
-          item.addEventListener('click', e => {
-            if (selectMode && e.target.type !== 'checkbox') {
-              e.preventDefault();
-              const cb = item.querySelector('.email-checkbox');
-              cb.checked = !cb.checked;
-              updateSelection();
-            }
-          });
-        });
-      });
-
-      // 从编辑菜单触发选择模式
-      function toggleSelectFromMenu() {
-        toggleSelect();
-        toggleEditMenu();
-      }
-
-      // 从编辑菜单触发标记已读
-      function markReadFromMenu() {
-        markRead();
-        toggleEditMenu();
-      }
-
-      // 从编辑菜单触发删除
-      function deleteFromMenu() {
-        doDelete();
-        toggleEditMenu();
-      }
-
-      // 切换选择模式
-      function toggleSelect() {
-        selectMode = !selectMode;
-        const list = document.querySelector('.email-list');
-
-        if (selectMode) {
-          list.classList.add('select-mode');
-        } else {
-          list.classList.remove('select-mode');
-          document.querySelectorAll('.email-checkbox').forEach(cb => cb.checked = false);
-          selectedIds.clear();
-          updateButtons();
-        }
-
-        updateEditMenuButtons();
-      }
-
-      // 更新选择状态
-      function updateSelection() {
-        selectedIds = new Set();
-        document.querySelectorAll('.email-checkbox:checked').forEach(cb => {
-          selectedIds.add({ id: cb.value, type: cb.dataset.type });
-        });
-        updateButtons();
-      }
-
-      // 更新按钮状态
-      function updateButtons() {
-        updateEditMenuButtons();
-      }
-
-      // 更新编辑菜单按钮状态
-      function updateEditMenuButtons() {
-        const count = selectedIds.size;
-        const readBtn = document.getElementById('editReadBtn');
-        const deleteBtn = document.getElementById('editDeleteBtn');
-        const selectBtn = document.getElementById('editSelectBtn');
-
-        if (readBtn) readBtn.disabled = count === 0;
-        if (deleteBtn) deleteBtn.disabled = count === 0;
-
-        if (selectBtn) {
-          if (selectMode) {
-            selectBtn.innerHTML = '<span data-lucide="check-square" class="edit-menu-icon"></span><span>退出选择</span>';
-          } else {
-            selectBtn.innerHTML = '<span data-lucide="square" class="edit-menu-icon"></span><span>选择内容</span>';
-          }
-          if (typeof lucide !== 'undefined') lucide.createIcons();
-        }
-      }
-
-      // 标记已读
-      async function markRead() {
-        if (selectedIds.size === 0) return;
-
-        const items = Array.from(selectedIds);
-        const emailIds = items.filter(i => i.type === 'email').map(i => i.id);
-        const rssIds = items.filter(i => i.type === 'rss').map(i => i.id);
-
-        // 标记邮件已读
-        if (emailIds.length > 0) {
-          await fetch('/api/mark-read', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ ids: emailIds })
-          });
-        }
-
-        // 标记 RSS 文章已读
-        if (rssIds.length > 0) {
-          await fetch('/api/articles/mark-read', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ ids: rssIds })
-          });
-        }
-
-        location.reload();
-      }
-
-      // 删除
-      async function doDelete() {
-        if (selectedIds.size === 0) return;
-        if (!confirm('确定删除 ' + selectedIds.size + ' 项内容？')) return;
-
-        const items = Array.from(selectedIds);
-        const emailIds = items.filter(i => i.type === 'email').map(i => i.id);
-        const rssIds = items.filter(i => i.type === 'rss').map(i => i.id);
-
-        // 删除邮件
-        if (emailIds.length > 0) {
-          await fetch('/api/delete', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ ids: emailIds })
-          });
-        }
-
-        // 删除 RSS 文章
-        if (rssIds.length > 0) {
-          await fetch('/api/articles/delete', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ ids: rssIds })
-          });
-        }
-
-        location.reload();
-      }
-    </script>
   `;
 }
 
