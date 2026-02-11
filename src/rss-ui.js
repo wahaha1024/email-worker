@@ -36,6 +36,9 @@ function renderFeedsManagement(feeds) {
         <div class="feed-stat ${feed.is_active ? 'status-active' : 'status-inactive'}">
           <span data-lucide="${feed.is_active ? 'check-circle' : 'x-circle'}"></span>
           <span>${feed.is_active ? '启用' : '禁用'}</span>
+          <button class="toggle-btn-small" onclick="toggleFeedStatus(${feed.id}, ${feed.is_active ? 0 : 1})" title="${feed.is_active ? '禁用' : '启用'}">
+            ${feed.is_active ? '禁用' : '启用'}
+          </button>
         </div>
       </div>
       ${feed.last_error ? `
@@ -105,6 +108,53 @@ function renderFeedsManagement(feeds) {
         <div class="modal-buttons">
           <button class="modal-btn modal-btn-cancel" onclick="closeAddFeedModal()">取消</button>
           <button class="modal-btn modal-btn-confirm" onclick="confirmAddFeed()">添加订阅</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 编辑订阅弹窗 -->
+    <div class="modal-overlay" id="editFeedModal">
+      <div class="modal">
+        <div class="modal-title">✏️ 编辑 RSS 订阅</div>
+        <div class="modal-body">
+          <label class="form-label">订阅源名称</label>
+          <input type="text" class="modal-input" id="editFeedName" placeholder="例如：阮一峰的网络日志">
+
+          <label class="form-label">RSS 地址</label>
+          <input type="url" class="modal-input" id="editFeedUrl" placeholder="https://example.com/feed">
+
+          <label class="form-label">分类</label>
+          <div class="category-buttons" id="editCategoryButtons">
+            <button class="category-btn" data-category="tech">技术</button>
+            <button class="category-btn" data-category="news">新闻</button>
+            <button class="category-btn" data-category="blog">博客</button>
+            <button class="category-btn" data-category="other">其他</button>
+          </div>
+
+          <label class="form-label">
+            抓取频率 (Cron 表达式)
+            <span class="form-help" title="格式: 分 时 日 月 周&#10;例如: 0 * * * * (每小时)&#10;0 */6 * * * (每6小时)">ⓘ</span>
+          </label>
+          <input type="text" class="modal-input" id="editFeedCron" value="0 * * * *" placeholder="0 * * * *">
+          <div class="cron-presets">
+            <button class="preset-btn" onclick="setEditCron('0 * * * *')">每小时</button>
+            <button class="preset-btn" onclick="setEditCron('0 */6 * * *')">每6小时</button>
+            <button class="preset-btn" onclick="setEditCron('0 0 * * *')">每天</button>
+          </div>
+
+          <label class="form-label">状态</label>
+          <div class="toggle-switch">
+            <input type="checkbox" id="editFeedActive" class="toggle-input">
+            <label for="editFeedActive" class="toggle-label">
+              <span class="toggle-slider"></span>
+              <span class="toggle-text-off">禁用</span>
+              <span class="toggle-text-on">启用</span>
+            </label>
+          </div>
+        </div>
+        <div class="modal-buttons">
+          <button class="modal-btn modal-btn-cancel" onclick="closeEditFeedModal()">取消</button>
+          <button class="modal-btn modal-btn-confirm" onclick="confirmEditFeed()">保存</button>
         </div>
       </div>
     </div>
@@ -214,6 +264,19 @@ function renderFeedsManagement(feeds) {
       .feed-stat.status-active { color: #22c55e; }
       .feed-stat.status-inactive { color: #ef4444; }
 
+      .toggle-btn-small {
+        margin-left: 8px;
+        padding: 2px 8px;
+        font-size: 11px;
+        border-radius: 4px;
+        border: 1px solid currentColor;
+        background: transparent;
+        color: inherit;
+        cursor: pointer;
+        transition: all 0.2s;
+      }
+      .toggle-btn-small:hover { background: rgba(0,0,0,0.05); }
+
       .feed-error {
         margin-top: 12px;
         padding: 10px 12px;
@@ -290,6 +353,68 @@ function renderFeedsManagement(feeds) {
         transition: all 0.2s;
       }
       .preset-btn:hover { background: var(--active-bg); color: var(--text); }
+
+      /* 切换开关样式 */
+      .toggle-switch {
+        margin-top: 8px;
+      }
+
+      .toggle-input {
+        display: none;
+      }
+
+      .toggle-label {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        cursor: pointer;
+        user-select: none;
+      }
+
+      .toggle-slider {
+        position: relative;
+        width: 48px;
+        height: 24px;
+        background: #ddd;
+        border-radius: 24px;
+        transition: all 0.3s;
+        flex-shrink: 0;
+      }
+
+      .toggle-slider::before {
+        content: '';
+        position: absolute;
+        width: 20px;
+        height: 20px;
+        border-radius: 50%;
+        background: white;
+        top: 2px;
+        left: 2px;
+        transition: all 0.3s;
+        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+      }
+
+      .toggle-input:checked + .toggle-label .toggle-slider {
+        background: var(--accent);
+      }
+
+      .toggle-input:checked + .toggle-label .toggle-slider::before {
+        left: 26px;
+      }
+
+      .toggle-text-off,
+      .toggle-text-on {
+        font-size: 14px;
+        color: var(--text-secondary);
+      }
+
+      .toggle-input:checked + .toggle-label .toggle-text-off {
+        display: none;
+      }
+
+      .toggle-input:not(:checked) + .toggle-label .toggle-text-on {
+        display: none;
+      }
     </style>
 
     <script>
@@ -381,7 +506,122 @@ function renderFeedsManagement(feeds) {
       }
 
       function editFeed(id) {
-        alert('编辑功能开发中...');
+        // 获取当前订阅源数据
+        const feedCard = document.querySelector(`[data-feed-id="${id}"]`);
+        if (!feedCard) return;
+
+        // 从页面获取当前数据（简单方法）
+        fetch(`/api/feeds`)
+          .then(res => res.json())
+          .then(data => {
+            const feed = data.feeds.find(f => f.id === id);
+            if (!feed) {
+              alert('订阅源不存在');
+              return;
+            }
+
+            // 填充表单
+            document.getElementById('editFeedName').value = feed.name;
+            document.getElementById('editFeedUrl').value = feed.url;
+            document.getElementById('editFeedCron').value = feed.cron_expression || '0 * * * *';
+            document.getElementById('editFeedActive').checked = feed.is_active === 1;
+
+            // 设置分类
+            document.querySelectorAll('#editCategoryButtons .category-btn').forEach(btn => {
+              btn.classList.remove('active');
+              if (btn.dataset.category === feed.category) {
+                btn.classList.add('active');
+              }
+            });
+
+            // 存储当前编辑的 ID
+            window.currentEditFeedId = id;
+
+            // 显示弹窗
+            document.getElementById('editFeedModal').classList.add('show');
+          })
+          .catch(err => {
+            alert('获取订阅源信息失败：' + err.message);
+          });
+      }
+
+      function closeEditFeedModal() {
+        document.getElementById('editFeedModal').classList.remove('show');
+        window.currentEditFeedId = null;
+      }
+
+      function setEditCron(cron) {
+        document.getElementById('editFeedCron').value = cron;
+      }
+
+      // 编辑弹窗的分类按钮事件
+      document.addEventListener('DOMContentLoaded', () => {
+        document.querySelectorAll('#editCategoryButtons .category-btn').forEach(btn => {
+          btn.addEventListener('click', () => {
+            document.querySelectorAll('#editCategoryButtons .category-btn').forEach(b => b.classList.remove('active'));
+            btn.classList.add('active');
+          });
+        });
+      });
+
+      async function toggleFeedStatus(id, active) {
+        try {
+          const response = await fetch(`/api/feeds/${id}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ is_active: active === 1 })
+          });
+          const result = await response.json();
+          if (result.success) {
+            location.reload();
+          } else {
+            alert('操作失败：' + result.error);
+          }
+        } catch (error) {
+          alert('操作失败：' + error.message);
+        }
+      }
+
+      async function confirmEditFeed() {
+        if (!window.currentEditFeedId) {
+          alert('无效的编辑操作');
+          return;
+        }
+
+        const name = document.getElementById('editFeedName').value.trim();
+        const url = document.getElementById('editFeedUrl').value.trim();
+        const cron = document.getElementById('editFeedCron').value.trim();
+        const isActive = document.getElementById('editFeedActive').checked;
+        const category = document.querySelector('#editCategoryButtons .category-btn.active')?.dataset.category || 'tech';
+
+        if (!name || !url) {
+          alert('请填写订阅源名称和地址');
+          return;
+        }
+
+        try {
+          const response = await fetch(`/api/feeds/${window.currentEditFeedId}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              name,
+              url,
+              category,
+              cron_expression: cron,
+              is_active: isActive
+            })
+          });
+
+          const result = await response.json();
+          if (result.success) {
+            alert('订阅源更新成功！');
+            location.reload();
+          } else {
+            alert('更新失败：' + result.error);
+          }
+        } catch (error) {
+          alert('更新失败：' + error.message);
+        }
       }
 
       if (typeof lucide !== 'undefined') {

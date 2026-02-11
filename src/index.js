@@ -1,6 +1,6 @@
 // src/index.js - 邮件管理系统 - Koobai 风格 + 完整功能 + RSS 订阅
 import PostalMime from 'postal-mime';
-import { parseRssFeed, fetchRssArticles, fetchAllDueFeeds, shouldRunCron } from './rss-utils.js';
+import { parseRssFeed, fetchRssArticles, fetchAllDueFeeds, fetchAllFeedsManual, cleanOldArticles, shouldRunCron } from './rss-utils.js';
 
 // 内存日志缓冲区（用于快速查看）
 let operationLogs = [];
@@ -331,8 +331,16 @@ export default {
   async scheduled(event, env, ctx) {
     console.log('Cron triggered at:', new Date().toISOString());
     try {
-      const result = await fetchAllDueFeeds(env);
+      // 拉取 RSS 订阅
+      const result = await fetchAllDueFeeds(env, addLog);
       console.log('RSS fetch result:', result);
+
+      // 每天清理一次旧文章（保留一周）
+      const now = new Date();
+      if (now.getHours() === 3 && now.getMinutes() < 5) {
+        const cleanResult = await cleanOldArticles(env);
+        console.log('Clean old articles result:', cleanResult);
+      }
     } catch (error) {
       console.error('Cron error:', error);
     }
@@ -372,6 +380,7 @@ async function handleRequest(request, env) {
 
   // 合并视图
   if (path === '/api/unified') return handleUnifiedContent(request, env);
+  if (path === '/api/rss/refresh' && request.method === 'POST') return handleRssRefresh(request, env);
 
   if (path === '/api/emails') return handleApiEmails(request, env);
   if (path === '/api/mark-read') return handleMarkRead(request, env);
@@ -739,12 +748,15 @@ async function handleLivePage(request, env) {
       /* 扩展容器宽度 */
       body.live-page .main {
         max-width: 100%;
-        padding: 20px 40px;
+        padding: 20px 40px 10px;
+      }
+      body.live-page {
+        padding-bottom: 0;
       }
       .live-container {
         position: relative;
         width: 100%;
-        height: calc(100vh - 140px);
+        height: calc(100vh - 80px);
         padding: 0;
       }
       .live-panel {
@@ -766,9 +778,56 @@ async function handleLivePage(request, env) {
         padding: 10px 16px;
         background: var(--accent-light);
         border-bottom: 1px solid var(--border);
+        transition: all 0.3s ease;
       }
       .panel-header.drag-handle {
         cursor: move;
+      }
+      /* 标题栏隐藏状态 */
+      .live-panel.header-hidden .panel-header {
+        transform: translateY(-100%);
+        opacity: 0;
+        pointer-events: none;
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        z-index: 5;
+      }
+      .live-panel.header-hidden .panel-frame {
+        margin-top: 0;
+      }
+      /* 显示标题栏的悬浮按钮 */
+      .panel-show-header {
+        position: absolute;
+        top: 8px;
+        left: 50%;
+        transform: translateX(-50%);
+        width: 36px;
+        height: 20px;
+        border: none;
+        background: rgba(180, 167, 214, 0.9);
+        border-radius: 0 0 10px 10px;
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        color: white;
+        opacity: 0;
+        transition: all 0.3s ease;
+        z-index: 10;
+      }
+      .panel-show-header [data-lucide] {
+        width: 14px;
+        height: 14px;
+      }
+      .live-panel.header-hidden .panel-show-header {
+        opacity: 0.6;
+        top: 0;
+      }
+      .live-panel.header-hidden .panel-show-header:hover {
+        opacity: 1;
+        height: 24px;
       }
       .panel-title-group {
         display: flex;
@@ -813,11 +872,60 @@ async function handleLivePage(request, env) {
       .panel-frame {
         flex: 1;
         overflow: hidden;
+        position: relative;
       }
       .mobile-iframe {
         width: 100%;
         height: 100%;
         border: none;
+      }
+      /* iframe 加载失败提示 */
+      .iframe-error {
+        display: none;
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background: var(--bg-card);
+        align-items: center;
+        justify-content: center;
+        flex-direction: column;
+        gap: 16px;
+        padding: 24px;
+        text-align: center;
+      }
+      .iframe-error.show {
+        display: flex;
+      }
+      .iframe-error-icon {
+        width: 48px;
+        height: 48px;
+        color: var(--text-muted);
+      }
+      .iframe-error-title {
+        font-size: 16px;
+        font-weight: 500;
+        color: var(--text);
+      }
+      .iframe-error-desc {
+        font-size: 14px;
+        color: var(--text-secondary);
+        max-width: 400px;
+      }
+      .iframe-error-btn {
+        padding: 10px 20px;
+        background: var(--accent);
+        color: white;
+        border: none;
+        border-radius: var(--radius-sm);
+        cursor: pointer;
+        font-size: 14px;
+        transition: all 0.2s;
+      }
+      .iframe-error-btn:hover {
+        background: #9d8fc4;
+        transform: translateY(-1px);
       }
       /* 调整大小手柄 */
       .resize-handle {
@@ -1075,6 +1183,16 @@ async function handleLivePage(request, env) {
       .settings-btn.save:hover {
         opacity: 0.9;
       }
+      /* 实时页面底部导航 - 3秒后变透明 */
+      body.live-page .bottom-nav {
+        transition: opacity 0.5s ease;
+      }
+      body.live-page .bottom-nav.faded {
+        opacity: 0.15;
+      }
+      body.live-page .bottom-nav:hover {
+        opacity: 1 !important;
+      }
       /* 移动端 */
       @media (max-width: 768px) {
         body.live-page .main {
@@ -1133,6 +1251,10 @@ async function handleLivePage(request, env) {
         div.className = 'live-panel';
         div.dataset.panel = panelId;
         div.id = 'panel-' + panelId;
+
+        // 检测是否是 Telegram 链接
+        const isTelegram = config.url.includes('t.me/');
+
         div.innerHTML = \`
           <div class="panel-header drag-handle">
             <div class="panel-title-group">
@@ -1151,24 +1273,90 @@ async function handleLivePage(request, env) {
               </button>
             </div>
           </div>
-          <div class="panel-frame">
-            <iframe
-              id="iframe-\${panelId}"
-              src="\${config.url}"
-              class="mobile-iframe"
-              frameborder="0"
-              allowfullscreen
-              sandbox="allow-scripts allow-same-origin allow-popups allow-forms"
-            ></iframe>
+          <button class="panel-show-header" onclick="showPanelHeader('\${panelId}')" title="显示工具栏">
+            <span data-lucide="chevron-down"></span>
+          </button>
+          <div class="panel-frame" id="frame-\${panelId}">
+            \${isTelegram ? '' : '<iframe id="iframe-' + panelId + '" src="' + config.url + '" class="mobile-iframe" frameborder="0" allowfullscreen sandbox="allow-scripts allow-same-origin allow-popups allow-forms"></iframe><div class="iframe-error" id="error-' + panelId + '"><span data-lucide="alert-circle" class="iframe-error-icon"></span><div class="iframe-error-title">无法加载此页面</div><div class="iframe-error-desc">该网站禁止被嵌入到 iframe 中（X-Frame-Options 限制）</div><button class="iframe-error-btn" onclick="window.open(\\\'' + config.url + '\\\', \\\'_blank\\\')">在新标签页打开</button></div>'}
           </div>
           <div class="resize-handle resize-right" data-panel="\${panelId}" data-dir="right"></div>
           <div class="resize-handle resize-bottom" data-panel="\${panelId}" data-dir="bottom"></div>
           <div class="resize-handle resize-corner" data-panel="\${panelId}" data-dir="corner"></div>
         \`;
+
         div.style.left = config.x + '%';
         div.style.top = config.y + '%';
         div.style.width = config.width + '%';
         div.style.height = config.height + '%';
+
+        // Telegram Widget 需要在元素添加到 DOM 后再插入
+        if (isTelegram) {
+          setTimeout(() => {
+            const frameDiv = document.getElementById('frame-' + panelId);
+            if (frameDiv) {
+              const telegramMatch = config.url.match(/t\.me\/s?\/([^\/]+)(?:\/(\d+))?/);
+              if (telegramMatch) {
+                const channelName = telegramMatch[1];
+                const messageId = telegramMatch[2];
+
+                const container = document.createElement('div');
+                container.className = 'telegram-widget-container';
+                container.style.cssText = 'width:100%;height:100%;overflow-y:auto;padding:10px;';
+
+                const script = document.createElement('script');
+                script.async = true;
+                script.src = 'https://telegram.org/js/telegram-widget.js?22';
+
+                if (messageId) {
+                  script.setAttribute('data-telegram-post', channelName + '/' + messageId);
+                  script.setAttribute('data-width', '100%');
+                  script.setAttribute('data-userpic', 'false');
+                } else {
+                  script.setAttribute('data-telegram-discussion', channelName);
+                  script.setAttribute('data-comments-limit', '50');
+                  script.setAttribute('data-dark', '0');
+                }
+                script.setAttribute('data-color', 'b4a7d6');
+
+                container.appendChild(script);
+                frameDiv.appendChild(container);
+              }
+            }
+          }, 100);
+        }
+
+        // 2秒后自动隐藏标题栏
+        setTimeout(() => {
+          div.classList.add('header-hidden');
+        }, 2000);
+
+        // 非 Telegram 的 iframe 错误检测
+        if (!isTelegram) {
+          setTimeout(() => {
+            const iframe = document.getElementById('iframe-' + panelId);
+            const errorDiv = document.getElementById('error-' + panelId);
+            if (iframe && errorDiv) {
+              iframe.addEventListener('error', () => {
+                console.log('iframe error detected for', panelId);
+                errorDiv.classList.add('show');
+              });
+
+              setTimeout(() => {
+                try {
+                  const iframeDoc = iframe.contentDocument || iframe.contentWindow.document;
+                  if (!iframeDoc || iframeDoc.body.children.length === 0) {
+                    console.log('iframe load failed for', panelId);
+                    errorDiv.classList.add('show');
+                  }
+                } catch (e) {
+                  console.log('iframe cross-origin error for', panelId, e.message);
+                  errorDiv.classList.add('show');
+                }
+              }, 3000);
+            }
+          }, 100);
+        }
+
         return div;
       }
 
@@ -1204,6 +1392,17 @@ async function handleLivePage(request, env) {
         }
         renderPanels();
         setupAutoRefresh();
+        setupBottomNavFade();
+      }
+
+      // 设置底部导航栏3秒后变透明
+      function setupBottomNavFade() {
+        const bottomNav = document.querySelector('.bottom-nav');
+        if (bottomNav) {
+          setTimeout(() => {
+            bottomNav.classList.add('faded');
+          }, 3000);
+        }
       }
 
       // 设置自动刷新
@@ -1230,6 +1429,18 @@ async function handleLivePage(request, env) {
           if (iframe) {
             iframe.src = config.url;
           }
+        }
+      }
+
+      // 显示面板标题栏
+      function showPanelHeader(panelId) {
+        const panel = document.getElementById('panel-' + panelId);
+        if (panel) {
+          panel.classList.remove('header-hidden');
+          // 2秒后再次隐藏
+          setTimeout(() => {
+            panel.classList.add('header-hidden');
+          }, 2000);
         }
       }
 
@@ -1517,19 +1728,19 @@ function renderKoobaiPage({ page, emailId, content }) {
 
   const navButtons = [
     { id: 'inbox', icon: 'mail', label: '收件箱', href: '/', active: isInbox },
-    { id: 'logs', icon: 'activity', label: '日志', href: '/logs', active: isLogs || isDiagnostics },
-    { id: 'feeds', icon: 'rss', label: '订阅', href: '/feeds', active: isFeeds },
+    { id: 'logs', icon: 'activity', label: '日志', href: '/logs', active: isLogs || isDiagnostics, locked: true },
+    { id: 'feeds', icon: 'rss', label: '订阅', href: '/feeds', active: isFeeds, locked: true },
     { id: 'live', icon: 'trending-up', label: '实时', href: '/live', active: isLive },
   ];
 
   const actionButtons = isInbox ? [
-    { id: 'filter', icon: 'filter', label: '筛选', onclick: 'toggleFilterMenu()' },
-    { id: 'search', icon: 'search', label: '搜索', onclick: 'toggleSearchBox()' },
-    { id: 'edit', icon: 'pen-square', label: '编辑', onclick: 'toggleEditMenu()' },
+    { id: 'filter', icon: 'filter', label: '筛选', onclick: 'toggleFilterMenu()', locked: true },
+    { id: 'search', icon: 'search', label: '搜索', onclick: 'toggleSearchBox()', locked: true },
+    { id: 'edit', icon: 'pen-square', label: '编辑', onclick: 'toggleEditMenu()', locked: true },
   ] : isView ? [
     { id: 'back', icon: 'arrow-left', label: '返回', onclick: 'history.back()' },
-    { id: 'forward', icon: 'forward', label: '转发', onclick: `forwardEmail(${emailId})` },
-    { id: 'delete', icon: 'trash-2', label: '删除', onclick: `deleteEmail(${emailId})` },
+    { id: 'forward', icon: 'forward', label: '转发', onclick: `forwardEmail(${emailId})`, locked: true },
+    { id: 'delete', icon: 'trash-2', label: '删除', onclick: `deleteEmail(${emailId})`, locked: true },
   ] : [];
 
   return `<!DOCTYPE html>
@@ -1792,9 +2003,33 @@ body {
   color: var(--text-secondary);
 }
 
-.email-detail-body { line-height: 1.8; color: var(--text); font-size: 16px; }
-.email-detail-body img { max-width: 100%; border-radius: var(--radius-sm); margin: 16px 0; }
-.email-detail-body p { margin-bottom: 16px; }
+.email-detail-body { line-height: 1.9; color: var(--text); font-size: 18px !important; letter-spacing: 0.3px; }
+.email-detail-body img { max-width: 100% !important; width: auto !important; height: auto !important; border-radius: var(--radius-sm); margin: 20px 0; display: block; }
+.email-detail-body p { margin-bottom: 18px; font-size: 18px !important; line-height: 1.9 !important; }
+.email-detail-body span { font-size: inherit !important; }
+.email-detail-body td { font-size: 18px !important; }
+.email-detail-body p:empty { display: none; }
+.email-detail-body b, .email-detail-body strong { font-weight: 600; color: #111; }
+.email-detail-body a { color: var(--accent) !important; text-decoration: none !important; border-bottom: 1px solid rgba(180, 167, 214, 0.4); transition: all 0.2s; }
+.email-detail-body a:hover { border-bottom-color: var(--accent); }
+.email-detail-body blockquote { margin: 20px 0; padding: 16px 20px; background: rgba(180, 167, 214, 0.08); border-left: 4px solid var(--accent); border-radius: 0 var(--radius-sm) var(--radius-sm) 0; font-size: 15px; color: var(--text-secondary); }
+.email-detail-body blockquote p { margin-bottom: 8px; }
+.email-detail-body blockquote p:last-child { margin-bottom: 0; }
+.email-detail-body ul, .email-detail-body ol { margin: 16px 0; padding-left: 24px; }
+.email-detail-body li { margin-bottom: 8px; line-height: 1.8; }
+.email-detail-body h1, .email-detail-body h2, .email-detail-body h3 { font-weight: 600; color: #111; margin: 24px 0 16px; line-height: 1.4; }
+.email-detail-body h1 { font-size: 24px; }
+.email-detail-body h2 { font-size: 20px; }
+.email-detail-body h3 { font-size: 18px; }
+.email-detail-body pre { background: #f5f5f5; padding: 16px; border-radius: var(--radius-sm); overflow-x: auto; font-size: 14px; line-height: 1.6; }
+.email-detail-body code { background: rgba(0,0,0,0.05); padding: 2px 6px; border-radius: 4px; font-size: 14px; font-family: 'JetBrains Mono', monospace; }
+.email-detail-body pre code { background: none; padding: 0; }
+.email-detail-body table { width: 100% !important; max-width: 100% !important; border-collapse: collapse; margin: 16px 0; font-size: 15px; }
+.email-detail-body th, .email-detail-body td { padding: 12px !important; border: 1px solid var(--border); text-align: left; width: auto !important; }
+.email-detail-body th { background: rgba(0,0,0,0.03); font-weight: 600; }
+.email-detail-body hr { border: none; height: 1px; background: var(--border); margin: 24px 0; }
+.email-detail-body div, .email-detail-body span { max-width: 100% !important; }
+.email-detail-body * { box-sizing: border-box; }
 
 /* 底部导航栏 - Koobai 风格 */
 .bottom-nav {
@@ -1815,6 +2050,46 @@ body {
   justify-content: center;
   box-shadow: rgba(0, 0, 0, 0.08) 0px 2px 8px 0px, rgba(0, 0, 0, 0.08) 0px 8px 24px 0px;
   z-index: 1000;
+}
+
+.lock-btn {
+  position: fixed;
+  top: 24px;
+  right: 24px;
+  width: 36px;
+  height: 36px;
+  border: none;
+  background: rgba(242, 240, 235, 0.6);
+  backdrop-filter: blur(10px);
+  border-radius: 50%;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted);
+  opacity: 0.3;
+  transition: all 0.2s;
+  z-index: 999;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+}
+.lock-btn:hover {
+  opacity: 1;
+  background: rgba(242, 240, 235, 0.9);
+  color: var(--accent);
+  transform: scale(1.05);
+}
+.lock-btn svg {
+  width: 16px;
+  height: 16px;
+}
+body.unlocked .lock-btn {
+  color: var(--accent);
+  opacity: 0.5;
+  background: rgba(180, 167, 214, 0.15);
+}
+body.unlocked .lock-btn:hover {
+  opacity: 1;
+  background: rgba(180, 167, 214, 0.25);
 }
 
 .nav-menu {
@@ -1934,6 +2209,7 @@ body {
 }
 
 .modal-overlay.show { display: flex; }
+.modal-overlay.open { display: flex; }
 
 .modal {
   background: var(--bg-card);
@@ -2059,11 +2335,29 @@ body {
   <div class="nav-menu">
     ${navButtons.map(btn => `
       <a href="${btn.href}" ${btn.id === 'rss' ? 'target="_blank"' : ''}
-         class="nav-btn ${btn.active ? 'active' : ''}">
+         class="nav-btn ${btn.active ? 'active' : ''} ${btn.locked ? 'locked' : ''}"
+         ${btn.locked ? 'onclick="return window.checkUnlocked(event)"' : ''}>
         <span class="icon" data-lucide="${btn.icon}"></span>
         <span>${btn.label}</span>
       </a>
     `).join('')}
+  </div>
+</div>
+
+<!-- 右上角解锁按钮 -->
+<button class="lock-btn" id="lockBtn" title="解锁编辑功能">
+  <span data-lucide="lock"></span>
+</button>
+
+<!-- 解锁密码弹窗 -->
+<div class="modal-overlay" id="unlockModal">
+  <div class="modal">
+    <div class="modal-title">🔒 输入密码解锁</div>
+    <input type="password" class="modal-input" id="unlockPassword" placeholder="请输入密码">
+    <div class="modal-buttons">
+      <button class="modal-btn modal-btn-cancel" onclick="window.closeUnlockModal()">取消</button>
+      <button class="modal-btn modal-btn-confirm" onclick="window.confirmUnlock()">解锁</button>
+    </div>
   </div>
 </div>
 
@@ -2080,6 +2374,136 @@ body {
 </div>
 
 <script>
+  // 锁定状态管理
+  let isUnlocked = localStorage.getItem('unlocked') === 'true';
+  const UNLOCK_PASSWORD = '666';
+
+  // 初始化锁定状态
+  function initLockState() {
+    if (isUnlocked) {
+      document.body.classList.add('unlocked');
+      const lockBtn = document.querySelector('.lock-btn [data-lucide]');
+      if (lockBtn) lockBtn.setAttribute('data-lucide', 'unlock');
+    }
+    window.updateLockedElements();
+    if (typeof lucide !== 'undefined') lucide.createIcons();
+  }
+
+  // 更新锁定元素的显示
+  window.updateLockedElements = function() {
+    document.querySelectorAll('.locked').forEach(el => {
+      el.style.display = isUnlocked ? '' : 'none';
+    });
+  }
+
+  // 切换锁定状态
+  window.toggleLock = function() {
+    console.log('toggleLock called, isUnlocked:', isUnlocked);
+    if (isUnlocked) {
+      // 锁定
+      isUnlocked = false;
+      localStorage.setItem('unlocked', 'false');
+      document.body.classList.remove('unlocked');
+      const lockBtn = document.querySelector('.lock-btn [data-lucide]');
+      if (lockBtn) lockBtn.setAttribute('data-lucide', 'lock');
+      window.updateLockedElements();
+      if (typeof lucide !== 'undefined') lucide.createIcons();
+    } else {
+      // 显示解锁弹窗
+      const modal = document.getElementById('unlockModal');
+      console.log('unlockModal element:', modal);
+      if (modal) {
+        modal.classList.add('open');
+        console.log('Modal opened, classes:', modal.className);
+      } else {
+        console.error('unlockModal not found!');
+      }
+      setTimeout(() => {
+        const input = document.getElementById('unlockPassword');
+        console.log('unlockPassword input:', input);
+        if (input) input.focus();
+      }, 100);
+    }
+  }
+
+  // 检查是否已解锁
+  window.checkUnlocked = function(event) {
+    if (!isUnlocked) {
+      event.preventDefault();
+      window.toggleLock();
+      return false;
+    }
+    return true;
+  }
+
+  // 关闭解锁弹窗
+  window.closeUnlockModal = function() {
+    document.getElementById('unlockModal').classList.remove('open');
+    document.getElementById('unlockPassword').value = '';
+  }
+
+  // 确认解锁
+  window.confirmUnlock = function() {
+    const password = document.getElementById('unlockPassword').value;
+    if (password === UNLOCK_PASSWORD) {
+      isUnlocked = true;
+      localStorage.setItem('unlocked', 'true');
+      document.body.classList.add('unlocked');
+      const lockBtn = document.querySelector('.lock-btn [data-lucide]');
+      if (lockBtn) lockBtn.setAttribute('data-lucide', 'unlock');
+      window.updateLockedElements();
+      window.closeUnlockModal();
+      if (typeof lucide !== 'undefined') lucide.createIcons();
+    } else {
+      alert('密码错误');
+      document.getElementById('unlockPassword').value = '';
+      document.getElementById('unlockPassword').focus();
+    }
+  }
+
+  // 回车键解锁
+  document.addEventListener('DOMContentLoaded', () => {
+    console.log('DOMContentLoaded fired');
+
+    // 绑定锁按钮点击事件
+    const lockBtn = document.getElementById('lockBtn');
+    console.log('lockBtn element:', lockBtn);
+    if (lockBtn) {
+      lockBtn.addEventListener('click', () => {
+        console.log('Lock button clicked!');
+        window.toggleLock();
+      });
+      console.log('Lock button event listener attached');
+    } else {
+      console.error('lockBtn not found!');
+    }
+
+    const unlockInput = document.getElementById('unlockPassword');
+    console.log('unlockPassword element:', unlockInput);
+    if (unlockInput) {
+      unlockInput.addEventListener('keypress', (e) => {
+        if (e.key === 'Enter') window.confirmUnlock();
+      });
+    }
+
+    initLockState();
+    console.log('Lock state initialized');
+
+    // 首页自动刷新 RSS（后台静默拉取）
+    if (window.location.pathname === '/' || window.location.pathname === '') {
+      fetch('/api/rss/refresh', { method: 'POST' })
+        .then(res => res.json())
+        .then(data => {
+          console.log('RSS refresh result:', data);
+          // 如果有新文章，可以选择刷新页面或显示提示
+          if (data.fetched > 0) {
+            console.log('Fetched ' + data.fetched + ' feeds with new articles');
+          }
+        })
+        .catch(err => console.error('RSS refresh error:', err));
+    }
+  });
+
   // 初始化 Lucide 图标 - 多重保险机制
   function initLucideIcons() {
     if (typeof lucide !== 'undefined') {
@@ -2737,24 +3161,59 @@ function renderLogsContent(logs, stats = {}) {
     </div>
 
     <div class="email-logs-list">
-      ${filteredLogs.length > 0 ? filteredLogs.map(log => `
-        <div class="email-log-item">
-          <div class="email-log-header-row">
-            <div class="email-log-date">${formatKoobaiDate(log.timestamp)}</div>
+      ${filteredLogs.length > 0 ? filteredLogs.map(log => {
+        // 解析 details
+        let details = {};
+        try {
+          details = typeof log.details === 'string' ? JSON.parse(log.details) : log.details || {};
+        } catch (e) {
+          details = {};
+        }
+
+        // RSS 日志特殊处理
+        if (log.type === 'rss') {
+          const sourceLabel = details.source === 'cron-auto' ? '定时自动' :
+                             details.source === 'page-refresh' ? '页面刷新' :
+                             details.source === 'manual' ? '手动触发' : '未知';
+          return `
+            <div class="email-log-item">
+              <div class="email-log-header-row">
+                <div class="email-log-date">${details.time || formatKoobaiDate(log.timestamp)}</div>
+              </div>
+              <div class="email-log-body">
+                <div class="email-log-subject">📰 RSS拉取: ${escapeHtml(details.feed || log.action)}</div>
+                <div class="email-log-details">
+                  新增 ${details.newCount || 0} 篇 / 共 ${details.total || 0} 篇 · ${sourceLabel}
+                </div>
+              </div>
+              <div class="email-log-footer">
+                <span class="email-log-sender-tag">RSS订阅</span>
+                <span class="email-log-status-badge" style="background: #b4a7d615; color: #b4a7d6">成功</span>
+              </div>
+            </div>
+          `;
+        }
+
+        // 邮件日志
+        return `
+          <div class="email-log-item">
+            <div class="email-log-header-row">
+              <div class="email-log-date">${formatKoobaiDate(log.timestamp)}</div>
+            </div>
+            <div class="email-log-body">
+              <div class="email-log-subject">${escapeHtml(log.action)}</div>
+              ${log.error ? '<div class="email-log-error">' + escapeHtml(log.error) + '</div>' : ''}
+            </div>
+            <div class="email-log-footer">
+              <span class="email-log-sender-tag">${escapeHtml(log.sender || '系统')}</span>
+              <span class="email-log-status-badge" style="background: ${statusColors[log.type] || '#999'}15; color: ${statusColors[log.type] || '#999'}">${statusLabels[log.type] || log.type}</span>
+            </div>
           </div>
-          <div class="email-log-body">
-            <div class="email-log-subject">${escapeHtml(log.action)}</div>
-            ${log.error ? `<div class="email-log-error">${escapeHtml(log.error)}</div>` : ''}
-          </div>
-          <div class="email-log-footer">
-            <span class="email-log-sender-tag">${escapeHtml(log.sender || '系统')}</span>
-            <span class="email-log-status-badge" style="background: ${statusColors[log.type] || '#999'}15; color: ${statusColors[log.type] || '#999'}">${statusLabels[log.type] || log.type}</span>
-          </div>
-        </div>
-      `).join('') : `
+        `;
+      }).join('') : `
         <div class="empty" style="margin-top: 20px;">
           <div class="empty-icon">◈</div>
-          <div class="empty-text">暂无邮件处理记录</div>
+          <div class="empty-text">暂无处理记录</div>
         </div>
       `}
     </div>
@@ -2920,6 +3379,11 @@ function renderLogsContent(logs, stats = {}) {
         border-radius: 6px;
         font-size: 12px;
         font-family: JetBrainsMono, monospace;
+      }
+      .email-log-details {
+        font-size: 13px;
+        color: var(--text-secondary);
+        margin-top: 4px;
       }
     </style>
   `;
@@ -3719,10 +4183,26 @@ async function handleMarkArticlesRead(request, env) {
 }
 
 // 合并内容（邮件 + RSS）
+// RSS 手动刷新
+async function handleRssRefresh(request, env) {
+  try {
+    const result = await fetchAllFeedsManual(env, addLog);
+    return new Response(JSON.stringify(result), {
+      headers: { 'Content-Type': 'application/json' }
+    });
+  } catch (error) {
+    return new Response(JSON.stringify({ success: false, error: error.message }), {
+      status: 500,
+      headers: { 'Content-Type': 'application/json' }
+    });
+  }
+}
+
 async function handleUnifiedContent(request, env) {
   const url = new URL(request.url);
   const type = url.searchParams.get('type') || 'all';
   const search = url.searchParams.get('search') || '';
+  const rssDays = parseInt(url.searchParams.get('rss_days') || '3'); // 默认3天
 
   let items = [];
 
@@ -3740,16 +4220,20 @@ async function handleUnifiedContent(request, env) {
     })));
   }
 
-  // 获取 RSS 文章
+  // 获取 RSS 文章（过滤最近N天）
   if (type === 'all' || type === 'rss') {
+    const cutoffDate = new Date();
+    cutoffDate.setDate(cutoffDate.getDate() - rssDays);
+    const cutoffISO = cutoffDate.toISOString();
+
     const { results: articles } = await env.DB.prepare(`
       SELECT a.id, a.title, a.link, a.description as content_text,
              a.published_at as date, 'rss' as type, f.name as feed_name
       FROM rss_articles a
       JOIN rss_feeds f ON a.feed_id = f.id
-      WHERE a.is_deleted = 0
+      WHERE a.is_deleted = 0 AND a.published_at >= ?
       ORDER BY a.published_at DESC LIMIT 50
-    `).all();
+    `).bind(cutoffISO).all();
     items.push(...(articles || []).map(a => ({
       ...a,
       source: a.feed_name,
