@@ -1293,13 +1293,17 @@ async function handleLivePage(request, env) {
 
         // Telegram Widget 需要在元素添加到 DOM 后再插入
         if (isTelegram) {
+          console.log('[Live] Telegram URL detected, will load widget for:', config.url);
           setTimeout(() => {
             const frameDiv = document.getElementById('frame-' + panelId);
+            console.log('[Live] Frame div found:', frameDiv);
             if (frameDiv) {
               const telegramMatch = config.url.match(new RegExp('t\\\\.me\\\\/s?\\\\/([^\\\\/]+)(?:\\\\/(\\\d+))?'));
+              console.log('[Live] Telegram regex match result:', telegramMatch);
               if (telegramMatch) {
                 const channelName = telegramMatch[1];
                 const messageId = telegramMatch[2];
+                console.log('[Live] Channel:', channelName, 'Message ID:', messageId);
 
                 const container = document.createElement('div');
                 container.className = 'telegram-widget-container';
@@ -1310,19 +1314,28 @@ async function handleLivePage(request, env) {
                 script.src = 'https://telegram.org/js/telegram-widget.js?22';
 
                 if (messageId) {
-                  script.setAttribute('data-telegram-post', channelName + '/' + messageId);
+                  const postAttr = channelName + '/' + messageId;
+                  console.log('[Live] Setting data-telegram-post:', postAttr);
+                  script.setAttribute('data-telegram-post', postAttr);
                   script.setAttribute('data-width', '100%');
                   script.setAttribute('data-userpic', 'false');
                 } else {
+                  console.log('[Live] Setting data-telegram-discussion:', channelName);
                   script.setAttribute('data-telegram-discussion', channelName);
                   script.setAttribute('data-comments-limit', '50');
                   script.setAttribute('data-dark', '0');
                 }
                 script.setAttribute('data-color', 'b4a7d6');
 
+                console.log('[Live] Appending Telegram widget script');
                 container.appendChild(script);
                 frameDiv.appendChild(container);
+                console.log('[Live] Telegram widget added to DOM');
+              } else {
+                console.error('[Live] Telegram URL did not match regex:', config.url);
               }
+            } else {
+              console.error('[Live] Frame div not found for panel:', panelId);
             }
           }, 100);
         }
