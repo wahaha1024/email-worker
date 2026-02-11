@@ -1359,7 +1359,16 @@ async function handleLivePage(request, env) {
 
                   const notice = document.createElement('div');
                   notice.style.cssText = 'display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;padding:40px;text-align:center;color:var(--text-secondary);';
-                  notice.innerHTML = '<div style="font-size:48px;margin-bottom:20px;">📱</div><div style="font-size:18px;font-weight:600;margin-bottom:12px;color:var(--text);">Telegram 频道</div><div style="font-size:14px;margin-bottom:24px;line-height:1.6;">Telegram 不支持嵌入频道页面<br>请在新标签页中打开查看最新消息</div><button onclick="window.open(\'' + channelUrl + '\', \'_blank\')" style="padding:12px 24px;background:var(--accent);color:white;border:none;border-radius:8px;font-size:14px;cursor:pointer;transition:opacity 0.2s;" onmouseover="this.style.opacity=\'0.8\'" onmouseout="this.style.opacity=\'1\'">在新标签页打开</button>';
+
+                  const button = document.createElement('button');
+                  button.textContent = '在新标签页打开';
+                  button.style.cssText = 'padding:12px 24px;background:var(--accent);color:white;border:none;border-radius:8px;font-size:14px;cursor:pointer;transition:opacity 0.2s;';
+                  button.onmouseover = function() { this.style.opacity = '0.8'; };
+                  button.onmouseout = function() { this.style.opacity = '1'; };
+                  button.onclick = function() { window.open(channelUrl, '_blank'); };
+
+                  notice.innerHTML = '<div style="font-size:48px;margin-bottom:20px;">📱</div><div style="font-size:18px;font-weight:600;margin-bottom:12px;color:var(--text);">Telegram 频道</div><div style="font-size:14px;margin-bottom:24px;line-height:1.6;">Telegram 不支持嵌入频道页面<br>请在新标签页中打开查看最新消息</div>';
+                  notice.appendChild(button);
 
                   frameDiv.appendChild(notice);
                   console.log('[Live] Telegram notice added');
