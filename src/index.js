@@ -1298,7 +1298,7 @@ async function handleLivePage(request, env) {
             const frameDiv = document.getElementById('frame-' + panelId);
             console.log('[Live] Frame div found:', frameDiv);
             if (frameDiv) {
-              const telegramMatch = config.url.match(new RegExp('t\\\\.me\\\\/s?\\\\/([^\\\\/]+)(?:\\\\/(\\\d+))?'));
+              const telegramMatch = config.url.match(new RegExp('t\\.me/s?/([^/]+)(?:/(\\d+))?'));
               console.log('[Live] Telegram regex match result:', telegramMatch);
               if (telegramMatch) {
                 const channelName = telegramMatch[1];
