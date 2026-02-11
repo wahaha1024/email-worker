@@ -1291,9 +1291,9 @@ async function handleLivePage(request, env) {
         div.style.width = config.width + '%';
         div.style.height = config.height + '%';
 
-        // Telegram Widget 需要在元素添加到 DOM 后再插入
+        // Telegram 处理：有消息ID用Widget，无消息ID用iframe显示频道流
         if (isTelegram) {
-          console.log('[Live] Telegram URL detected, will load widget for:', config.url);
+          console.log('[Live] Telegram URL detected:', config.url);
           setTimeout(() => {
             const frameDiv = document.getElementById('frame-' + panelId);
             console.log('[Live] Frame div found:', frameDiv);
@@ -1305,32 +1305,39 @@ async function handleLivePage(request, env) {
                 const messageId = telegramMatch[2];
                 console.log('[Live] Channel:', channelName, 'Message ID:', messageId);
 
-                const container = document.createElement('div');
-                container.className = 'telegram-widget-container';
-                container.style.cssText = 'width:100%;height:100%;overflow-y:auto;padding:10px;';
-
-                const script = document.createElement('script');
-                script.async = true;
-                script.src = 'https://telegram.org/js/telegram-widget.js?22';
-
                 if (messageId) {
+                  // 有消息ID：使用 Widget 显示单条消息
+                  const container = document.createElement('div');
+                  container.className = 'telegram-widget-container';
+                  container.style.cssText = 'width:100%;height:100%;overflow-y:auto;padding:10px;';
+
+                  const script = document.createElement('script');
+                  script.async = true;
+                  script.src = 'https://telegram.org/js/telegram-widget.js?22';
                   const postAttr = channelName + '/' + messageId;
-                  console.log('[Live] Setting data-telegram-post:', postAttr);
+                  console.log('[Live] Using Widget for single post:', postAttr);
                   script.setAttribute('data-telegram-post', postAttr);
                   script.setAttribute('data-width', '100%');
                   script.setAttribute('data-userpic', 'false');
-                } else {
-                  console.log('[Live] Setting data-telegram-discussion:', channelName);
-                  script.setAttribute('data-telegram-discussion', channelName);
-                  script.setAttribute('data-comments-limit', '50');
-                  script.setAttribute('data-dark', '0');
-                }
-                script.setAttribute('data-color', 'b4a7d6');
+                  script.setAttribute('data-color', 'b4a7d6');
 
-                console.log('[Live] Appending Telegram widget script');
-                container.appendChild(script);
-                frameDiv.appendChild(container);
-                console.log('[Live] Telegram widget added to DOM');
+                  container.appendChild(script);
+                  frameDiv.appendChild(container);
+                  console.log('[Live] Telegram widget added');
+                } else {
+                  // 无消息ID：使用 iframe 显示频道流
+                  const channelUrl = 'https://t.me/s/' + channelName;
+                  console.log('[Live] Using iframe for channel feed:', channelUrl);
+                  const iframe = document.createElement('iframe');
+                  iframe.src = channelUrl;
+                  iframe.className = 'mobile-iframe';
+                  iframe.style.cssText = 'width:100%;height:100%;border:none;';
+                  iframe.setAttribute('frameborder', '0');
+                  iframe.setAttribute('allowfullscreen', '');
+                  iframe.setAttribute('sandbox', 'allow-scripts allow-same-origin allow-popups allow-forms');
+                  frameDiv.appendChild(iframe);
+                  console.log('[Live] Telegram iframe added');
+                }
               } else {
                 console.error('[Live] Telegram URL did not match regex:', config.url);
               }
