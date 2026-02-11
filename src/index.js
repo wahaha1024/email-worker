@@ -1277,7 +1277,7 @@ async function handleLivePage(request, env) {
             <span data-lucide="chevron-down"></span>
           </button>
           <div class="panel-frame" id="frame-\${panelId}">
-            \${isTelegram ? '' : '<iframe id="iframe-' + panelId + '" src="' + config.url + '" class="mobile-iframe" frameborder="0" allowfullscreen sandbox="allow-scripts allow-same-origin allow-popups allow-forms"></iframe><div class="iframe-error" id="error-' + panelId + '"><span data-lucide="alert-circle" class="iframe-error-icon"></span><div class="iframe-error-title">无法加载此页面</div><div class="iframe-error-desc">该网站禁止被嵌入到 iframe 中（X-Frame-Options 限制）</div><button class="iframe-error-btn" onclick="window.open(\\\'' + config.url + '\\\', \\\'_blank\\\')">在新标签页打开</button></div>'}
+            \${isTelegram ? '' : \`<iframe id="iframe-\${panelId}" src="\${config.url}" class="mobile-iframe" frameborder="0" allowfullscreen sandbox="allow-scripts allow-same-origin allow-popups allow-forms"></iframe><div class="iframe-error" id="error-\${panelId}"><span data-lucide="alert-circle" class="iframe-error-icon"></span><div class="iframe-error-title">无法加载此页面</div><div class="iframe-error-desc">该网站禁止被嵌入到 iframe 中（X-Frame-Options 限制）</div><button class="iframe-error-btn" onclick="window.open('\${config.url}', '_blank')">在新标签页打开</button></div>\`}
           </div>
           <div class="resize-handle resize-right" data-panel="\${panelId}" data-dir="right"></div>
           <div class="resize-handle resize-bottom" data-panel="\${panelId}" data-dir="bottom"></div>
