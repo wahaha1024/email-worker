@@ -1247,6 +1247,7 @@ async function handleLivePage(request, env) {
 
       // 创建面板DOM
       function createPanelElement(panelId, config) {
+        console.log('[Live] createPanelElement called:', panelId, config);
         const div = document.createElement('div');
         div.className = 'live-panel';
         div.dataset.panel = panelId;
@@ -1254,6 +1255,7 @@ async function handleLivePage(request, env) {
 
         // 检测是否是 Telegram 链接
         const isTelegram = config.url.includes('t.me/');
+        console.log('[Live] isTelegram:', isTelegram);
 
         div.innerHTML = \`
           <div class="panel-header drag-handle">
@@ -1362,34 +1364,60 @@ async function handleLivePage(request, env) {
 
       // 渲染所有面板
       function renderPanels() {
+        console.log('[Live] renderPanels called, panelConfig:', panelConfig);
         const container = document.getElementById('liveContainer');
+        console.log('[Live] Container element:', container);
+        if (!container) {
+          console.error('[Live] liveContainer not found!');
+          return;
+        }
         container.innerHTML = '';
-        Object.keys(panelConfig).forEach(panelId => {
+        const panelKeys = Object.keys(panelConfig);
+        console.log('[Live] Panel keys to render:', panelKeys);
+        panelKeys.forEach(panelId => {
+          console.log('[Live] Creating panel:', panelId, panelConfig[panelId]);
           const el = createPanelElement(panelId, panelConfig[panelId]);
+          console.log('[Live] Panel element created:', el);
           container.appendChild(el);
+          console.log('[Live] Panel appended to container');
         });
-        if (typeof lucide !== 'undefined') lucide.createIcons();
+        console.log('[Live] All panels rendered, container children:', container.children.length);
+        if (typeof lucide !== 'undefined') {
+          console.log('[Live] Initializing Lucide icons...');
+          lucide.createIcons();
+        } else {
+          console.warn('[Live] Lucide not available');
+        }
         initDragResize();
       }
 
       // 从服务端加载配置
       async function loadConfig() {
+        console.log('[Live] loadConfig started');
         try {
+          console.log('[Live] Fetching /api/live-config...');
           const res = await fetch('/api/live-config');
+          console.log('[Live] API response status:', res.status, res.ok);
           if (res.ok) {
             const config = await res.json();
+            console.log('[Live] Config loaded:', config);
             if (config && Object.keys(config).length > 0) {
               panelConfig = config;
+              console.log('[Live] Using loaded config, keys:', Object.keys(panelConfig));
             } else {
               panelConfig = { ...defaultPanels };
+              console.log('[Live] Empty config, using defaults');
             }
           } else {
             panelConfig = { ...defaultPanels };
+            console.log('[Live] API error, using defaults');
           }
         } catch (e) {
-          console.log('Load config failed:', e);
+          console.error('[Live] Load config failed:', e);
           panelConfig = { ...defaultPanels };
         }
+        console.log('[Live] Final panelConfig:', panelConfig);
+        console.log('[Live] Calling renderPanels...');
         renderPanels();
         setupAutoRefresh();
         setupBottomNavFade();
