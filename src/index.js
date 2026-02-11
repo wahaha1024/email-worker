@@ -1325,18 +1325,16 @@ async function handleLivePage(request, env) {
                   frameDiv.appendChild(container);
                   console.log('[Live] Telegram widget added');
                 } else {
-                  // 无消息ID：使用 iframe 显示频道流
+                  // 无消息ID：Telegram 禁止 iframe 嵌入，显示提示
                   const channelUrl = 'https://t.me/s/' + channelName;
-                  console.log('[Live] Using iframe for channel feed:', channelUrl);
-                  const iframe = document.createElement('iframe');
-                  iframe.src = channelUrl;
-                  iframe.className = 'mobile-iframe';
-                  iframe.style.cssText = 'width:100%;height:100%;border:none;';
-                  iframe.setAttribute('frameborder', '0');
-                  iframe.setAttribute('allowfullscreen', '');
-                  iframe.setAttribute('sandbox', 'allow-scripts allow-same-origin allow-popups allow-forms');
-                  frameDiv.appendChild(iframe);
-                  console.log('[Live] Telegram iframe added');
+                  console.log('[Live] Telegram channel (no iframe support):', channelUrl);
+
+                  const notice = document.createElement('div');
+                  notice.style.cssText = 'display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;padding:40px;text-align:center;color:var(--text-secondary);';
+                  notice.innerHTML = '<div style="font-size:48px;margin-bottom:20px;">📱</div><div style="font-size:18px;font-weight:600;margin-bottom:12px;color:var(--text);">Telegram 频道</div><div style="font-size:14px;margin-bottom:24px;line-height:1.6;">Telegram 不支持嵌入频道页面<br>请在新标签页中打开查看最新消息</div><button onclick="window.open(\'' + channelUrl + '\', \'_blank\')" style="padding:12px 24px;background:var(--accent);color:white;border:none;border-radius:8px;font-size:14px;cursor:pointer;transition:opacity 0.2s;" onmouseover="this.style.opacity=\'0.8\'" onmouseout="this.style.opacity=\'1\'">在新标签页打开</button>';
+
+                  frameDiv.appendChild(notice);
+                  console.log('[Live] Telegram notice added');
                 }
               } else {
                 console.error('[Live] Telegram URL did not match regex:', config.url);
