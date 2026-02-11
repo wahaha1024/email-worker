@@ -1332,29 +1332,18 @@ async function handleLivePage(request, env) {
           div.classList.add('header-hidden');
         }, 2000);
 
-        // 非 Telegram 的 iframe 错误检测
+        // 非 Telegram 的 iframe 错误检测（已禁用 - 跨域是正常的）
         if (!isTelegram) {
+          // 只监听真正的 error 事件，不检查 contentDocument（会导致跨域误判）
           setTimeout(() => {
             const iframe = document.getElementById('iframe-' + panelId);
             const errorDiv = document.getElementById('error-' + panelId);
             if (iframe && errorDiv) {
               iframe.addEventListener('error', () => {
-                console.log('iframe error detected for', panelId);
+                console.log('[Live] iframe error event for', panelId);
                 errorDiv.classList.add('show');
               });
-
-              setTimeout(() => {
-                try {
-                  const iframeDoc = iframe.contentDocument || iframe.contentWindow.document;
-                  if (!iframeDoc || iframeDoc.body.children.length === 0) {
-                    console.log('iframe load failed for', panelId);
-                    errorDiv.classList.add('show');
-                  }
-                } catch (e) {
-                  console.log('iframe cross-origin error for', panelId, e.message);
-                  errorDiv.classList.add('show');
-                }
-              }, 3000);
+              // 移除 contentDocument 检查 - 跨域访问会抛出异常但 iframe 实际正常工作
             }
           }, 100);
         }
