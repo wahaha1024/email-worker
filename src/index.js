@@ -725,6 +725,16 @@ async function handleLivePage(request, env) {
             <input type="url" id="settingUrl" placeholder="https://...">
           </div>
           <div class="settings-field">
+            <label>移动端模式</label>
+            <div class="settings-row">
+              <label class="toggle">
+                <input type="checkbox" id="settingMobileMode" checked>
+                <span class="toggle-slider"></span>
+              </label>
+              <span class="toggle-desc">模拟移动设备访问（显示手机版网站）</span>
+            </div>
+          </div>
+          <div class="settings-field">
             <label>自动刷新</label>
             <div class="settings-row">
               <label class="toggle">
@@ -875,6 +885,14 @@ async function handleLivePage(request, env) {
         position: relative;
       }
       .mobile-iframe {
+        width: 100%;
+        height: 100%;
+        border: none;
+        /* 模拟移动端视口 */
+        max-width: 414px;
+        margin: 0 auto;
+      }
+      .desktop-iframe {
         width: 100%;
         height: 100%;
         border: none;
@@ -1145,6 +1163,11 @@ async function handleLivePage(request, env) {
         font-size: 13px;
         color: var(--text-secondary);
       }
+      .toggle-desc {
+        font-size: 13px;
+        color: var(--text-secondary);
+        margin-left: 12px;
+      }
       .settings-footer {
         display: flex;
         gap: 12px;
@@ -1220,6 +1243,7 @@ async function handleLivePage(request, env) {
           url: 'https://m.123.com.cn/wap2/market_live',
           autoRefresh: false,
           interval: 60,
+          mobileMode: true,
           x: 0, y: 0, width: 48, height: 100
         },
         panel_2: {
@@ -1227,6 +1251,7 @@ async function handleLivePage(request, env) {
           url: 'https://api3.cls.cn/share/subject/1103?sv=859&os=web',
           autoRefresh: false,
           interval: 60,
+          mobileMode: true,
           x: 50, y: 0, width: 48, height: 100
         }
       };
@@ -1279,7 +1304,7 @@ async function handleLivePage(request, env) {
             <span data-lucide="chevron-down"></span>
           </button>
           <div class="panel-frame" id="frame-\${panelId}">
-            \${isTelegram ? '' : \`<iframe id="iframe-\${panelId}" src="\${config.url}" class="mobile-iframe" frameborder="0" allowfullscreen sandbox="allow-scripts allow-same-origin allow-popups allow-forms"></iframe><div class="iframe-error" id="error-\${panelId}"><span data-lucide="alert-circle" class="iframe-error-icon"></span><div class="iframe-error-title">无法加载此页面</div><div class="iframe-error-desc">该网站禁止被嵌入到 iframe 中（X-Frame-Options 限制）</div><button class="iframe-error-btn" onclick="window.open('\${config.url}', '_blank')">在新标签页打开</button></div>\`}
+            \${isTelegram ? '' : \`<iframe id="iframe-\${panelId}" src="\${config.url}" class="\${config.mobileMode !== false ? 'mobile-iframe' : 'desktop-iframe'}" frameborder="0" allowfullscreen sandbox="allow-scripts allow-same-origin allow-popups allow-forms"></iframe><div class="iframe-error" id="error-\${panelId}"><span data-lucide="alert-circle" class="iframe-error-icon"></span><div class="iframe-error-title">无法加载此页面</div><div class="iframe-error-desc">该网站禁止被嵌入到 iframe 中（X-Frame-Options 限制）</div><button class="iframe-error-btn" onclick="window.open('\${config.url}', '_blank')">在新标签页打开</button></div>\`}
           </div>
           <div class="resize-handle resize-right" data-panel="\${panelId}" data-dir="right"></div>
           <div class="resize-handle resize-bottom" data-panel="\${panelId}" data-dir="bottom"></div>
@@ -1497,6 +1522,7 @@ async function handleLivePage(request, env) {
 
         document.getElementById('settingTitle').value = config.title;
         document.getElementById('settingUrl').value = config.url;
+        document.getElementById('settingMobileMode').checked = config.mobileMode !== false;
         document.getElementById('settingAutoRefresh').checked = config.autoRefresh;
         document.getElementById('settingInterval').value = config.interval;
 
@@ -1523,19 +1549,15 @@ async function handleLivePage(request, env) {
           ...oldConfig,
           title: document.getElementById('settingTitle').value || oldConfig.title,
           url: document.getElementById('settingUrl').value || oldConfig.url,
+          mobileMode: document.getElementById('settingMobileMode').checked,
           autoRefresh: document.getElementById('settingAutoRefresh').checked,
           interval: parseInt(document.getElementById('settingInterval').value) || 60
         };
 
         await saveConfigToServer();
 
-        // 更新DOM
-        const panelEl = document.querySelector('[data-panel="' + currentPanel + '"]');
-        if (panelEl) {
-          panelEl.querySelector('.panel-title').textContent = panelConfig[currentPanel].title;
-          const iframe = document.getElementById('iframe-' + currentPanel);
-          if (iframe) iframe.src = panelConfig[currentPanel].url;
-        }
+        // 更新DOM - 需要重新渲染以应用 mobileMode 变化
+        renderPanels();
 
         setupAutoRefresh();
         closeSettings();
@@ -1562,6 +1584,7 @@ async function handleLivePage(request, env) {
         panelConfig[panelId] = {
           title: '新窗口 ' + (existingCount + 1),
           url: 'https://example.com',
+          mobileMode: true,
           autoRefresh: false,
           interval: 60,
           x: Math.min(existingCount * 10, 50),
