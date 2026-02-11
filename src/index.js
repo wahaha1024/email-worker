@@ -622,6 +622,24 @@ async function handleDiagnosticsPage(request, env) {
 
 // 获取实时面板配置
 async function handleGetLiveConfig(request, env) {
+  // 默认配置
+  const defaultConfig = {
+    panel_1: {
+      title: '市场行情',
+      url: 'https://m.123.com.cn/wap2/market_live',
+      autoRefresh: false,
+      interval: 60,
+      x: 0, y: 0, width: 48, height: 100
+    },
+    panel_2: {
+      title: '财联社快讯',
+      url: 'https://api3.cls.cn/share/subject/1103?sv=859&os=web',
+      autoRefresh: false,
+      interval: 60,
+      x: 50, y: 0, width: 48, height: 100
+    }
+  };
+
   try {
     // 尝试从数据库获取配置
     const result = await env.DB.prepare(
@@ -633,33 +651,15 @@ async function handleGetLiveConfig(request, env) {
         headers: { 'Content-Type': 'application/json' }
       });
     }
-
-    // 返回默认配置
-    const defaultConfig = {
-      panel_1: {
-        title: '市场行情',
-        url: 'https://m.123.com.cn/wap2/market_live',
-        autoRefresh: false,
-        interval: 60,
-        x: 0, y: 0, width: 48, height: 100
-      },
-      panel_2: {
-        title: '财联社快讯',
-        url: 'https://api3.cls.cn/share/subject/1103?sv=859&os=web',
-        autoRefresh: false,
-        interval: 60,
-        x: 50, y: 0, width: 48, height: 100
-      }
-    };
-    return new Response(JSON.stringify(defaultConfig), {
-      headers: { 'Content-Type': 'application/json' }
-    });
   } catch (e) {
-    return new Response(JSON.stringify({ error: e.message }), {
-      status: 500,
-      headers: { 'Content-Type': 'application/json' }
-    });
+    // 数据库错误（如表不存在），忽略并使用默认配置
+    console.log('DB error in handleGetLiveConfig, using default config:', e.message);
   }
+
+  // 返回默认配置
+  return new Response(JSON.stringify(defaultConfig), {
+    headers: { 'Content-Type': 'application/json' }
+  });
 }
 
 // 保存实时面板配置
